@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
+from .api import SmashrunError
 from .const import DOMAIN
 from .runs_util import (
     COUNT_BUCKETS,
@@ -16,6 +17,7 @@ from .runs_util import (
     best_days,
     count_buckets,
     personal_records,
+    run_details,
     weekly_summary,
     yearly_summary,
 )
@@ -24,6 +26,46 @@ from .runs_util import (
 def async_register(hass: HomeAssistant) -> None:
     """Register the commands."""
     websocket_api.async_register_command(hass, ws_summary)
+    websocket_api.async_register_command(hass, ws_run)
+
+
+def _loaded_entry(hass: HomeAssistant, entry_id: str | None):
+    """The Smashrun entry to answer for (the first loaded one by default)."""
+    entries = [
+        e
+        for e in hass.config_entries.async_entries(DOMAIN)
+        if e.state is ConfigEntryState.LOADED
+    ]
+    if entry_id:
+        entries = [e for e in entries if e.entry_id == entry_id]
+    return entries[0] if entries else None
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/run",
+        vol.Required("run_id"): vol.All(str, vol.Match(r"^\d{1,15}$")),
+        vol.Optional("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_run(hass: HomeAssistant, connection, msg) -> None:
+    """One run's location and track (fetched from Smashrun once, then cached)."""
+    entry = _loaded_entry(hass, msg.get("entry_id"))
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Smashrun is not set up")
+        return
+    coordinator = entry.runtime_data
+    run_id = msg["run_id"]
+    details = coordinator.run_details.get(run_id)
+    if details is None:
+        try:
+            details = run_details(await coordinator.api.async_get_activity(run_id))
+        except SmashrunError as err:
+            connection.send_error(msg["id"], "smashrun_error", str(err))
+            return
+        coordinator.run_details[run_id] = details
+    connection.send_result(msg["id"], {"run_id": run_id, **details})
 
 
 @websocket_api.websocket_command(
@@ -38,14 +80,8 @@ def async_register(hass: HomeAssistant) -> None:
 @callback
 def ws_summary(hass: HomeAssistant, connection, msg) -> None:
     """Distance per week, month and year, run counts and personal records."""
-    entries = [
-        e
-        for e in hass.config_entries.async_entries(DOMAIN)
-        if e.state is ConfigEntryState.LOADED
-    ]
-    if msg.get("entry_id"):
-        entries = [e for e in entries if e.entry_id == msg["entry_id"]]
-    if not entries:
+    entry = _loaded_entry(hass, msg.get("entry_id"))
+    if entry is None:
         connection.send_error(msg["id"], "not_found", "Smashrun is not set up")
         return
 
@@ -57,7 +93,7 @@ def ws_summary(hass: HomeAssistant, connection, msg) -> None:
             connection.send_error(msg["id"], "invalid_format", str(err))
             return
 
-    coordinator = entries[0].runtime_data
+    coordinator = entry.runtime_data
     runs = coordinator.data.runs  # oldest first
     tz = dt_util.get_default_time_zone()
     username = coordinator.user.get("username")
@@ -65,7 +101,7 @@ def ws_summary(hass: HomeAssistant, connection, msg) -> None:
     def url(run_id: str) -> str | None:
         return f"https://smashrun.com/{username}/run/{run_id}" if username else None
 
-    records = personal_records(runs, tz)
+    records = personal_records(runs, tz, buckets)
     for scope in records.values():
         for record in scope.values():
             if record is not None:

@@ -8,7 +8,7 @@
   The page prints "RESULT: PASS (n checks)" or "RESULT: FAIL ..." in #out.
   Add ?demo=statistics|records|count (and &lang=pt, &theme=dark, &units=mi, &w=340,
   &mode=monthly|volume and &detail=1 (open the table) for the statistics tab,
-  &rmode=volume for the records tab,
+  &rmode=volume and &rdetail=10k (open a record's run) for the records tab,
   &hover=<month 0-11> to show the chart tooltip)
   to show one card for a screenshot instead of running the checks.
 -->
@@ -61,8 +61,9 @@ const weeks = {};
 [thisYear - 3, thisYear - 2, thisYear - 1, thisYear].forEach((y, i) => {
   weeks[String(y)] = Array.from({ length: 53 }, (_, w) => (w < 52 ? Math.round((14 + 6 * i + 6 * Math.sin(w / 3 + y)) * 10) / 10 : 0));
 });
-const rec = (id, date, time, pace, dist) => ({
-  run_id: id, start: date, time_s: time, pace_s_per_km: pace, run_distance_km: dist,
+// A record is the run as raced: its time, its pace (time / distance).
+const rec = (id, date, time, _pace, dist) => ({
+  run_id: id, start: date, time_s: time, pace_s_per_km: Math.round((time / dist) * 10) / 10, run_distance_km: dist, run_duration_s: time,
   url: `https://smashrun.com/runner/run/${id}`,
 });
 const SUMMARY = {
@@ -117,6 +118,14 @@ function makeHass({ lang = "en", units = "km", runs = "42", fail = false, dark =
     callWS: async (msg) => {
       calls.push(msg);
       if (fail) throw { code: "not_found", message: "Smashrun is not set up" };
+      if (msg.type === "ha_smashrun/run") {
+        if (msg.run_id === "503") throw { code: "smashrun_error", message: "boom" };
+        const track = Array.from({ length: 60 }, (_, i) => {
+          const a = (i / 59) * 2 * Math.PI;
+          return [-23.5874 + 0.006 * Math.sin(a) + 0.002 * Math.sin(3 * a), -46.6576 + 0.009 * Math.cos(a)];
+        });
+        return { run_id: msg.run_id, city: "São Paulo", state: "São Paulo", country: "Brazil", track };
+      }
       return JSON.parse(JSON.stringify(SUMMARY));
     },
   };
@@ -187,6 +196,10 @@ async function demo() {
   if (params.get("rmode")) {
     await tick(); await tick();
     $(document.querySelector("ha-smashrun-card"), `[data-record-mode="${params.get("rmode")}"]`).click();
+  }
+  if (params.get("rdetail")) {
+    await tick(); await tick();
+    $(document.querySelector("ha-smashrun-card"), `[data-record-key="${params.get("rdetail")}"]`).click();
   }
   if (params.get("detail")) {
     await tick(); await tick();
@@ -404,7 +417,7 @@ async function run() {
   $(card, '[data-tab="records"]').click();
   eq($$(card, ".tile .label").map((l) => l.textContent), ["5K", "10K", "21K", "42K"], "record distances");
   eq($$(card, ".tile .value").map((v) => v.textContent), ["21:30", "45:35", "1:41:50", "—"], "all-time times");
-  ok($$(card, ".tile .pace")[0].textContent === "4:18 /km", "pace per km");
+  ok($$(card, ".tile .pace")[0].textContent === "4:17 /km", "pace per km");
   ok($$(card, ".tile .meta")[1].textContent.includes("12.4 km"), "longer run is mentioned");
   ok(!$$(card, ".tile .meta")[0].textContent.includes("run"), "a ~5 km run is not called longer");
   ok($(card, ".tile a").href.endsWith("/run/501"), "record links to the run");
@@ -427,6 +440,66 @@ async function run() {
   eq($$(card, ".chip:not(.bulk).on").map((c) => c.dataset.year), [thisYear - 1, thisYear - 2, thisYear - 3].map(String), "chart selection is separate");
   $(card, '[data-tab="records"]').click();
   ok(!$(card, ".note"), "no note under the records");
+
+  // Clicking a performance tile shows its run below; clicking it again hides it.
+  bulk(card, "all");
+  ok(!$(card, ".run-detail"), "no run detail at first");
+  $(card, '[data-record-key="10k"]').click();
+  const detail = $(card, '.run-detail[data-record-detail="10k"]');
+  ok(detail && $(card, '[data-record-key="10k"]').classList.contains("selected"), "10K run shown, tile selected");
+  ok(!detail.querySelector(".run-head .yeartag") && detail.querySelector(".run-head").textContent.trim() === "10K", "detail heading: distance only, no year tag");
+  const detailRows = Object.fromEntries([...detail.querySelectorAll(".run-row")].map((r) => [r.querySelector("dt").textContent, r.querySelector("dd").textContent]));
+  eq([detailRows.Distance, detailRows["Race Time"], detailRows["Race Pace"]], ["12.40 km", "45:35", "3:41 /km"], "run detail: distance, race time, race pace");
+  ok(!("10K record" in detailRows), "run detail: no separate record row (the record is the run's time)");
+  ok(detailRows.Date && detailRows.Date.includes(String(thisYear)), "run detail: date");
+  ok(!/\d{1,2}:\d{2}/.test(detailRows.Date) && /^\d{1,2}:\d{2}/.test(detailRows.Time), "run detail: Date and Time (start) in their own rows");
+  ok(detailRows.Location === "…", "run detail: location loading");
+  await tick(); await tick();
+  const runCalls = card._hass.calls.filter((c) => c.type === "ha_smashrun/run");
+  eq(runCalls.map((c) => c.run_id), ["502"], "asks Home Assistant for the run once");
+  const located = [...$(card, ".run-detail").querySelectorAll(".run-row")].find((r) => r.querySelector("dt").textContent === "Location");
+  ok(located && located.querySelector("dd").textContent === "São Paulo, Brazil", "run detail: location without repeats");
+  // Route: the track drawn on its own (no map behind), start and end marked.
+  const map = $(card, ".run-detail .run-map");
+  ok(map, "run detail: map");
+  eq(map.querySelector(".route-line").getAttribute("d").split(/[ML]/).filter(Boolean).length, 60, "map: one point per track point");
+  ok(map.querySelector(".route-start") && map.querySelector(".route-end"), "map: start and end");
+  const tileImgs = [...map.querySelectorAll("img.tile-img")];
+  ok(tileImgs.length > 0 && tileImgs.every((t) => t.src.includes("/Canvas/World_Light_Gray_Base/")), "map: Esri Light Gray behind the route (light theme, default)");
+  ok(map.querySelector(".map-credit").textContent.includes("Esri"), "map: credits");
+  const mapRect = map.getBoundingClientRect();
+  ok(tileImgs.some((t) => { const r = t.getBoundingClientRect(); return r.left <= mapRect.left + 1 && r.top <= mapRect.top + 1; })
+    && tileImgs.some((t) => { const r = t.getBoundingClientRect(); return r.right >= mapRect.right - 1 && r.bottom >= mapRect.bottom - 1; }), "map: tiles cover the box");
+  const dlBox = $(card, ".run-detail dl").getBoundingClientRect();
+  ok($(card, ".run-body").classList.contains("cols") && map.getBoundingClientRect().left >= dlBox.right, "data on the left, route on the right");
+  const side = $(card, ".run-side");
+  const locRow = [...side.querySelectorAll(".run-row")].find((r) => r.querySelector("dt").textContent === "Location");
+  ok(locRow && locRow.getBoundingClientRect().bottom <= map.getBoundingClientRect().top + 1, "location on the right, above the route");
+  const locText = locRow.querySelector("dd"), route = map.querySelector(".route-line");
+  const range = document.createRange(); range.selectNodeContents(locText);
+  const textBox = range.getBoundingClientRect(), routeBox2 = route.getBoundingClientRect();
+  ok(Math.abs((textBox.left + textBox.right) / 2 - (routeBox2.left + routeBox2.right) / 2) < 6, "location centered over the route");
+  ok(![...$(card, ".run-body > dl").querySelectorAll("dt")].some((d) => d.textContent === "Location"), "location not in the left column");
+  const fill = map.querySelector(".route-line").getBoundingClientRect(), mapBox = map.getBoundingClientRect();
+  ok(fill.width >= mapBox.width - 40 || fill.height >= mapBox.height - 40, "map: the route fills the box");
+  const box = map.getBoundingClientRect();
+  const routeBox = map.querySelector(".route-line").getBoundingClientRect();
+  ok(routeBox.left >= box.left && routeBox.right <= box.right && routeBox.top >= box.top && routeBox.bottom <= box.bottom, "map: track inside the box");
+
+  ok(!detail.querySelector("a.open-run"), "run detail: no Open on Smashrun link");
+  $(card, '[data-record-key="5k"]').click();
+  ok($(card, '.run-detail[data-record-detail="5k"]') && !$(card, '[data-record-detail="10k"]'), "another tile switches the run");
+  $(card, '[data-record-key="5k"] a').dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  ok($(card, '.run-detail[data-record-detail="5k"]'), "clicking the year tag link keeps the detail");
+  $(card, '[data-record-key="10k"]').click();
+  await tick(); await tick();
+  eq(card._hass.calls.filter((c) => c.type === "ha_smashrun/run").length, 2, "the 10K run is not asked again (cached), the 5K once");
+  $(card, '[data-record-key="21k"]').click();
+  await tick(); await tick();
+  ok(![...$(card, ".run-detail").querySelectorAll("dt")].some((d) => d.textContent === "Location"), "no location row when Home Assistant has none");
+  ok(!$(card, ".run-detail .run-map"), "no map without details");
+  $(card, '[data-record-key="21k"]').click();
+  ok(!$(card, ".run-detail"), "a second click hides it");
   const oneLine = () => new Set($$(card, ".tiles.row .tile").map((t) => Math.round(t.getBoundingClientRect().top))).size === 1;
   ok($$(card, ".tiles.row .tile").length === 4 && oneLine(), "records: four tiles on one line");
 
@@ -486,7 +559,7 @@ async function run() {
   card = mount({ default_tab: "records" }, hass);
   await tick(); await tick();
   eq($$(card, ".tab").map((b) => b.textContent), ["Estatísticas", "Recordes pessoais", "Contagem"], "Portuguese tabs");
-  ok($$(card, ".tile .pace")[0].textContent === "6:55 /mi", "pace per mile");
+  ok($$(card, ".tile .pace")[0].textContent === "6:54 /mi", "pace per mile");
   ok($$(card, ".tile .meta")[1].textContent.includes("7,7 mi"), "longer run in miles, pt decimals");
   eq($(card, ".chip.bulk").textContent, "Nenhum", "Portuguese None (every year selected in the records)");
   $(card, '[data-tab="count"]').click();
@@ -594,8 +667,26 @@ async function run() {
   try { document.createElement("ha-smashrun-card").setConfig({ count_years: -1 }); } catch (e) { threw = true; }
   ok(threw, "negative years are rejected");
   const form = customElements.get("ha-smashrun-card").getConfigForm();
-  eq(form.schema.map((f) => f.name), ["title", "default_tab", "entry_id", "years", "count_ranges"], "editor sections");
-  eq(form.schema[4].schema.map((f) => f.default), [4.5, 9.5, 20.5, 41.5, 48], "editor range defaults");
+  eq(form.schema.map((f) => f.name), ["title", "default_tab", "entry_id", "route_map", "years", "count_ranges"], "editor sections");
+  ok(form.schema[3].default === true && form.schema[3].selector.boolean, "editor: route map switch, on by default");
+  eq(form.schema[5].schema.map((f) => f.default), [4.5, 9.5, 20.5, 41.5, 48], "editor range defaults");
+
+  // route_map: false draws the route alone.
+  hass = makeHass();
+  card = mount({ default_tab: "records", route_map: false }, hass);
+  await tick(); await tick();
+  $(card, '[data-record-key="10k"]').click();
+  await tick(); await tick();
+  const bare = $(card, ".run-detail .run-map");
+  ok(bare && bare.querySelector(".route-line") && !bare.querySelector("img") && !bare.querySelector(".map-credit"), "route_map false: route without the map");
+
+  // Dark theme: Esri Dark Gray.
+  hass = makeHass({ dark: true });
+  card = mount({ default_tab: "records" }, hass);
+  await tick(); await tick();
+  $(card, '[data-record-key="10k"]').click();
+  await tick(); await tick();
+  ok([...$(card, ".run-map").querySelectorAll("img.tile-img")].every((t) => t.src.includes("/Canvas/World_Dark_Gray_Base/")), "map: Esri Dark Gray on a dark theme");
   ok(window.customCards.some((c) => c.type === "ha-smashrun-card"), "registered in the card picker");
 
   document.getElementById("out").textContent = failures.length

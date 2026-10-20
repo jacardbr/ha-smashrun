@@ -18,6 +18,7 @@
  *   type: custom:ha-smashrun-card
  *
  * Options: title, default_tab (statistics | records | count), entry_id,
+ * route_map (a gray map behind a record's route, default true),
  * statistics_years / records_years / count_years (years selected at first,
  * 0 = every year) and range_5k / range_10k / range_21k / range_42k /
  * range_max (count ranges in km).
@@ -69,12 +70,18 @@ const STRINGS = {
     per_run: "Per run",
     vs_prev: "Comparison",
     from_run: "from a {d} run",
-    no_record: "No run this long yet",
+    no_record: "No run of this distance yet",
     no_data: "No runs yet.",
     no_runs_selected: "No runs in the selected years.",
     loading: "Loading…",
     error: "Could not load Smashrun data: {e}",
     open_run: "Open on Smashrun",
+    run_date: "Date",
+    run_location: "Location",
+    run_distance: "Distance",
+    run_start: "Time",
+    run_time: "Race Time",
+    run_pace: "Race Pace",
     select_years: "Years",
     all: "All",
     total: "Total",
@@ -100,12 +107,18 @@ const STRINGS = {
     per_run: "Por corrida",
     vs_prev: "Comparação",
     from_run: "numa corrida de {d}",
-    no_record: "Nenhuma corrida com essa distância ainda",
+    no_record: "Nenhuma corrida nessa distância ainda",
     no_data: "Nenhuma corrida ainda.",
     no_runs_selected: "Nenhuma corrida nos anos selecionados.",
     loading: "Carregando…",
     error: "Não foi possível carregar os dados do Smashrun: {e}",
     open_run: "Abrir no Smashrun",
+    run_date: "Data",
+    run_location: "Local",
+    run_distance: "Distância",
+    run_start: "Hora",
+    run_time: "Tempo de prova",
+    run_pace: "Pace da prova",
     select_years: "Anos",
     all: "Todos",
     total: "Total",
@@ -145,6 +158,28 @@ function niceScale(max, ticks = 4) {
   return { max: Math.ceil(max / step) * step, step };
 }
 
+// Route drawing: Web Mercator world size at zoom 0, and the box height when
+// the route sits below the data (narrow cards).
+const TILE_SIZE = 256;
+// Map behind the route (card option route_map, on by default): Esri's Light
+// Gray and Dark Gray Canvas basemaps (no API key), following the theme. Their
+// terms ask for the credit shown on the map. They go up to zoom 16; closer
+// views scale those tiles up.
+const TILE_URLS = {
+  light: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+  dark: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+};
+const TILE_MAX_ZOOM = 16;
+const TILE_CREDIT = "© Esri, HERE, Garmin, OSM";
+const MAP_HEIGHT = 220;
+
+// Web Mercator: [lat, lon] -> world pixels at zoom z.
+function project(lat, lon, z) {
+  const scale = TILE_SIZE * 2 ** z;
+  const sin = Math.sin((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180);
+  return [((lon + 180) / 360) * scale, (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * scale];
+}
+
 // ISO week (Monday to Sunday) of a date: { year, week }.
 function isoWeek(date) {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
@@ -168,7 +203,9 @@ class HaSmashrunCard extends HTMLElement {
     this._tab = "statistics";
     this._mode = "cumulative";
     this._showTable = false;
-    this._recordMode = "performance"; // records tab: performance | volume // year table under the line chart (Detail button)
+    this._recordMode = "performance"; // records tab: performance | volume
+    this._recordDetail = null; // performance tile whose run is shown below (key)
+    this._runInfo = {}; // run id -> details from ha_smashrun/run (location, track), "loading" or null // year table under the line chart (Detail button)
     this._years = null; // selected years in the chart (Set), null = default
     this._recordYears = null; // selected years in the records (Set), null = default
     this._countYears = null; // selected years in the count (Set), null = default
@@ -184,7 +221,7 @@ class HaSmashrunCard extends HTMLElement {
       const width = Math.round(entries[0].contentRect.width / 10) * 10;
       if (width && width !== this._width) {
         this._width = width;
-        if (this._tab === "statistics" && this._data) this._render();
+        if (this._data && (this._tab === "statistics" || (this._tab === "records" && this._recordDetail))) this._render();
       }
     });
     this._resize.observe(this);
@@ -217,6 +254,7 @@ class HaSmashrunCard extends HTMLElement {
           },
         },
         { name: "entry_id", selector: { config_entry: { integration: DOMAIN } } },
+        { name: "route_map", default: true, selector: { boolean: {} } },
         {
           name: "years",
           type: "expandable",
@@ -245,6 +283,7 @@ class HaSmashrunCard extends HTMLElement {
           title: "Title",
           default_tab: "Starting tab",
           entry_id: "Smashrun account",
+          route_map: "Map behind a record's route",
           statistics_years: "Statistics",
           records_years: "Personal Records",
           count_years: "Count",
@@ -575,6 +614,16 @@ class HaSmashrunCard extends HTMLElement {
         this._render();
       });
     }
+    // Performance tile: show (or hide) its run below. The year tag inside is
+    // a link to the run and keeps working on its own.
+    root.querySelectorAll("[data-record-key]").forEach((tile) =>
+      tile.addEventListener("click", (ev) => {
+        if (ev.target.closest("a")) return;
+        const key = tile.dataset.recordKey;
+        this._recordDetail = this._recordDetail === key ? null : key;
+        this._render();
+      })
+    );
     root.querySelectorAll("[data-record-mode]").forEach((btn) =>
       btn.addEventListener("click", () => {
         this._recordMode = btn.dataset.recordMode;
@@ -1128,7 +1177,8 @@ class HaSmashrunCard extends HTMLElement {
       const longer = target && rec.run_distance_km > target * 1.02;
       // The year as a tag in the year's color; the date shows on hover.
       const tag = this._yearTag(this._recordYearOf(rec), this._fmtDate(rec.start), rec.url);
-      return `<div class="tile">
+      const open = this._recordDetail === key;
+      return `<div class="tile clickable${open ? " selected" : ""}" data-record-key="${key}" role="button" tabindex="0" aria-expanded="${open}">
         <div class="label">${RECORD_LABELS[key]}</div>
         <div class="value">${esc(fmtDuration(rec.time_s))}</div>
         <div class="pace">${esc(this._fmtPace(rec.pace_s_per_km))}</div>
@@ -1138,8 +1188,132 @@ class HaSmashrunCard extends HTMLElement {
       </div>`;
     }).join("");
 
+    const shown = this._recordDetail && best(this._recordDetail);
     return `
-      <div class="tiles row">${tiles}</div>`;
+      <div class="tiles row">${tiles}</div>
+      ${shown ? this._recordRun(this._recordDetail, shown) : ""}`;
+  }
+
+  // Asks Home Assistant for one run's location and track (once per run).
+  async _loadRun(runId) {
+    if (!runId || runId in this._runInfo || !this._hass || typeof this._hass.callWS !== "function") return;
+    this._runInfo[runId] = "loading";
+    const msg = { type: `${DOMAIN}/run`, run_id: String(runId) };
+    if (this._config.entry_id) msg.entry_id = this._config.entry_id;
+    try {
+      this._runInfo[runId] = await this._hass.callWS(msg);
+    } catch (err) {
+      this._runInfo[runId] = null; // no details: the row is left out
+    }
+    this._render();
+  }
+
+  // The run's GPS track as a line fitted to the box (Web Mercator, so the
+  // shape keeps its proportions), over Esri's gray basemap unless the
+  // route_map option is off. Tiles only come in whole zoom levels, so the
+  // nearest lower level is scaled up to the line's zoom.
+  _runMap(track, W, H = MAP_HEIGHT) {
+    if (!track || track.length < 2) return "";
+    const pad = 12;
+    // Web Mercator at zoom 0, then scaled to fill the box (no tiles, so the
+    // zoom can be any number).
+    const pts = track.map(([lat, lon]) => project(lat, lon, 0));
+    const xs = pts.map((p) => p[0]);
+    const ys = pts.map((p) => p[1]);
+    const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    const spanX = Math.max(maxX - minX, 1e-9);
+    const spanY = Math.max(maxY - minY, 1e-9);
+    const scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
+    const offX = (W - spanX * scale) / 2;
+    const offY = (H - spanY * scale) / 2;
+    const xy = pts.map(([x, y]) => [((x - minX) * scale + offX).toFixed(1), ((y - minY) * scale + offY).toFixed(1)]);
+    const d = xy.map((p, i) => `${i ? "L" : "M"}${p[0]} ${p[1]}`).join(" ");
+    const [sx, sy] = xy[0];
+    const [ex, ey] = xy[xy.length - 1];
+    let tiles = "";
+    let credit = "";
+    if (this._config.route_map !== false) {
+      const zoom = Math.max(0, Math.min(TILE_MAX_ZOOM, Math.floor(Math.log2(scale))));
+      const n = 2 ** zoom;
+      const tile = (TILE_SIZE / n) * scale; // a tile's size on screen
+      const left = minX - offX / scale; // world (zoom 0) point at the box's edges
+      const top = minY - offY / scale;
+      for (let tx = Math.floor((left / TILE_SIZE) * n); tx <= Math.floor(((left + W / scale) / TILE_SIZE) * n); tx++) {
+        for (let ty = Math.floor((top / TILE_SIZE) * n); ty <= Math.floor(((top + H / scale) / TILE_SIZE) * n); ty++) {
+          if (ty < 0 || ty >= n) continue;
+          const url = TILE_URLS[this._darkMode() ? "dark" : "light"]
+            .replace("{z}", zoom)
+            .replace("{x}", ((tx % n) + n) % n)
+            .replace("{y}", ty);
+          tiles += `<img class="tile-img" alt="" src="${url}" style="left:${(((tx * TILE_SIZE) / n - minX) * scale + offX).toFixed(
+            1
+          )}px;top:${(((ty * TILE_SIZE) / n - minY) * scale + offY).toFixed(1)}px;width:${tile.toFixed(1)}px;height:${tile.toFixed(1)}px">`;
+        }
+      }
+      credit = `<div class="map-credit">${esc(TILE_CREDIT)}</div>`;
+    }
+    return `
+      <div class="run-map${tiles ? " with-map" : ""}" style="width:${W}px;height:${H}px">
+        ${tiles}
+        <svg class="route" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true">
+          <path d="${d}" class="route-line"/>
+          <circle cx="${sx}" cy="${sy}" r="5" class="route-start"/>
+          <circle cx="${ex}" cy="${ey}" r="5" class="route-end"/>
+        </svg>
+        ${credit}
+      </div>`;
+  }
+
+  // "City, State, Country" without repeats (New York, New York -> once).
+  _place(info) {
+    const parts = [];
+    for (const part of [info.city, info.state, info.country]) {
+      if (part && !parts.includes(part)) parts.push(part);
+    }
+    return parts.join(", ");
+  }
+
+  // The run behind a performance record, shown below the tiles.
+  _recordRun(key, rec) {
+    const info = this._runInfo[rec.run_id];
+    if (info === undefined) Promise.resolve().then(() => this._loadRun(rec.run_id));
+    const place = info === "loading" || info === undefined ? "…" : info ? this._place(info) : "";
+    // The date and the start time, each in its own row.
+    const when = new Date(rec.start);
+    let date = this._fmtDate(rec.start);
+    let time = "";
+    try {
+      date = when.toLocaleDateString(this._language(), { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+      time = when.toLocaleTimeString(this._language(), { hour: "2-digit", minute: "2-digit" });
+    } catch (e) {
+      // keep the plain date
+    }
+    const runPace = rec.run_distance_km && rec.run_duration_s ? rec.run_duration_s / rec.run_distance_km : null;
+    const row = (label, value) => `<div class="run-row"><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`;
+    // The data on the left; the location and the route on the right. A
+    // narrow card puts them below.
+    const inner = Math.max(240, (this._width || 632) - 32 - 26); // the detail box's inner width
+    const twoCols = inner >= 420;
+    const mapWidth = twoCols ? Math.floor((inner - 16) / 2) : inner;
+    return `
+      <div class="run-detail" data-record-detail="${key}">
+        <div class="run-head">
+          <span class="label">${RECORD_LABELS[key]}</span>
+        </div>
+        <div class="run-body${twoCols ? " cols" : ""}">
+        <dl>
+          ${row(this._t("run_date"), date)}
+          ${time ? row(this._t("run_start"), time) : ""}
+          ${row(this._t("run_distance"), this._fmtDist(rec.run_distance_km, 2))}
+          ${rec.run_duration_s ? row(this._t("run_time"), fmtDuration(rec.run_duration_s)) : ""}
+          ${runPace ? row(this._t("run_pace"), this._fmtPace(runPace)) : ""}
+        </dl>
+        <div class="run-side">
+          ${place ? `<dl>${row(this._t("run_location"), place)}</dl>` : ""}
+          ${info && info !== "loading" ? this._runMap(info.track, mapWidth, twoCols ? 200 : MAP_HEIGHT) : ""}
+        </div>
+        </div>
+      </div>`;
   }
 
   // Year of a record's run, in HA's time zone like the server-side grouping.
@@ -1300,6 +1474,31 @@ const STYLE = `
   .tiles.row .tile { padding: 10px; min-width: 0; container-type: inline-size; }
   .tiles.row .tile .value { font-size: clamp(1.05em, 17cqi, 1.6em); white-space: nowrap; }
   .tiles.row .tile .pace { font-size: 0.9em; }
+  .tile.clickable { cursor: pointer; }
+  .tile.selected { border-color: var(--primary-color); }
+  .run-detail { margin-top: 10px; border: 1px solid var(--divider-color); border-radius: 12px; padding: 12px; }
+  .run-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .run-head .label { font-size: 0.85em; font-weight: 600; color: var(--primary-color); letter-spacing: 0.03em; }
+  .run-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px 16px; }
+  .run-body.cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .run-detail dl { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .run-side { display: grid; gap: 8px; align-content: start; }
+  .run-side .run-row { text-align: center; }
+  .run-row dt { font-size: 0.8em; color: var(--secondary-text-color); }
+  .run-row dd { margin: 2px 0 0; font-size: 0.95em; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
+  .run-map { position: relative; overflow: hidden; max-width: 100%; }
+  .run-map.with-map { border-radius: 8px; }
+  .run-map .tile-img { position: absolute; max-width: none; user-select: none; pointer-events: none; }
+  .map-credit {
+    position: absolute; right: 0; bottom: 0; padding: 1px 6px; font-size: 9px; white-space: nowrap; border-top-left-radius: 6px;
+    background: rgba(255, 255, 255, 0.75); color: #333;
+  }
+  .map-credit a { color: inherit; }
+  ha-card.dark .map-credit { background: rgba(0, 0, 0, 0.6); color: #ddd; }
+  .run-map .route { position: absolute; left: 0; top: 0; }
+  .route-line { fill: none; stroke: var(--primary-color); stroke-width: 3.5; stroke-linejoin: round; stroke-linecap: round; }
+  .route-start { fill: var(--success-color, #43a047); stroke: #fff; stroke-width: 2; }
+  .route-end { fill: var(--error-color, #db4437); stroke: #fff; stroke-width: 2; }
   /* An empty line (the Year tile has no period) keeps its height, so the
      year tags line up across the tiles. */
   .tile .pace:empty::before { content: "\\00a0"; }

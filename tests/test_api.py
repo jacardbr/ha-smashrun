@@ -500,6 +500,37 @@ class RunsUtilTests(unittest.TestCase):
         self.assertEqual(bucket(47.999), "42k")
         self.assertIsNone(bucket(48.0))  # ultras are not counted
 
+    def test_run_details(self):
+        # Shape of GET /my/activities/{id} (seen on the public example account).
+        lats = [-1] + [40.68 + i / 10000 for i in range(999)]
+        lons = [-1] + [-73.92 - i / 10000 for i in range(999)]
+        activity = {
+            "city": "New York", "state": "New York", "country": "USA", "countryCode": "us",
+            "startLatitude": 40.68, "startLongitude": -73.92,
+            "heartRateAverage": 151, "elevationGain": 12.5, "temperature": -1,
+            "recordingKeys": ["distance", "latitude", "longitude", "clock"],
+            "recordingValues": [list(range(1000)), lats, lons, list(range(1000))],
+        }
+        details = runs_util.run_details(activity, max_points=100)
+        self.assertEqual((details["city"], details["state"], details["country"]), ("New York", "New York", "USA"))
+        self.assertEqual(details["country_code"], "us")
+        self.assertEqual(details["heart_rate_average"], 151.0)
+        self.assertIsNone(details["temperature"])  # -1 means unknown
+        track = details["track"]
+        self.assertEqual(len(track), 100)
+        self.assertEqual(track[0], [40.68, -73.92])  # the -1 gap is dropped
+        self.assertEqual(track[-1], [round(40.68 + 998 / 10000, 6), round(-73.92 - 998 / 10000, 6)])
+
+    def test_run_details_without_gps(self):
+        details = runs_util.run_details({"city": "", "recordingKeys": ["distance"], "recordingValues": [[1, 2]]})
+        self.assertIsNone(details["city"])
+        self.assertEqual(details["track"], [])
+
+    def test_get_activity(self):
+        client, session = _client(lambda path, params: (200, {"activityId": 7, "city": "Rio"}))
+        self.assertEqual(run(client.async_get_activity("7"))["city"], "Rio")
+        self.assertEqual(session.calls[-1][0], "my/activities/7")
+
     def test_best_days(self):
         best = runs_util.best_days(self._runs(), TZ)
         # 2026-10-12 has two runs (5 + 2 km): 7 km, less than the 10 km day.
@@ -537,26 +568,42 @@ class RunsUtilTests(unittest.TestCase):
                 {"runId": 5, "startTime": "2026-03-01T07:00:00-03:00", "distance": 4.96, "duration": 1240}, TZ
             )
         )
+        runs.append(
+            api.SmashrunRun.from_json(  # 9.6 km: in the 10K range but short of 10 km
+                {"runId": 6, "startTime": "2026-04-01T07:00:00-03:00", "distance": 9.6, "duration": 2000}, TZ
+            )
+        )
         records = runs_util.personal_records(runs, TZ)
         five = records["all"]["5k"]
         self.assertEqual(five["run_id"], "5")
         self.assertEqual(five["pace_s_per_km"], 250.0)
-        self.assertEqual(five["time_s"], 1250.0)
-        # 10K: the half marathon (21.1 km in 1:45:00, 4:58.6/km) beats run 3
-        # (10 km in 50:00): a longer run can hold a shorter record.
-        self.assertEqual(records["all"]["10k"]["run_id"], "4")
-        self.assertAlmostEqual(records["all"]["10k"]["time_s"], 6300 / 21.1 * 10, places=0)
-        # Within 2026 only, run 3 is the best 10K.
-        self.assertEqual(records["2026"]["10k"]["run_id"], "3")
-        self.assertEqual(records["2026"]["10k"]["time_s"], 3000.0)
-        # 21K: only run 4 is long enough; 42K: nobody.
+        self.assertEqual(five["time_s"], 1240.0)  # the run's real time, not scaled to 5 km
+        # 10K: only runs of the 10K range count. The half marathon (run 4) is
+        # faster per km but is a 21K; the 9.6 km run is too short.
+        self.assertEqual(records["all"]["10k"]["run_id"], "3")
+        self.assertEqual(records["all"]["10k"]["time_s"], 3000.0)
+        # The run's own totals come along, for the card's detail.
+        self.assertEqual(records["all"]["21k"]["run_distance_km"], 21.1)
+        self.assertEqual(records["all"]["21k"]["run_duration_s"], 6300.0)
+        # 21K: run 4; 42K: nobody.
         self.assertEqual(records["all"]["21k"]["run_id"], "4")
-        self.assertAlmostEqual(records["all"]["21k"]["time_s"], 6300 / 21.1 * 21.0975, places=0)
+        self.assertEqual(records["all"]["21k"]["time_s"], 6300.0)  # 21.1 km as raced
         self.assertIsNone(records["all"]["42k"])
-        # Per year.
-        self.assertEqual(records["2025"]["5k"]["run_id"], "4")
-        self.assertIsNone(records["2026"]["21k"])
+        # Per year: 2025 only has the half marathon, so no 5K or 10K.
+        self.assertIsNone(records["2025"]["5k"])
+        self.assertIsNone(records["2025"]["10k"])
+        self.assertEqual(records["2025"]["21k"]["run_id"], "4")
         self.assertEqual(records["2026"]["5k"]["run_id"], "5")
+        self.assertIsNone(records["2026"]["21k"])
+
+    def test_personal_records_custom_ranges(self):
+        # With a 10K range starting at 15 km, the 10 km run becomes a 5K.
+        runs = [self._runs()[2]]
+        buckets = runs_util.count_buckets([4.5, 15, 20.5, 41.5, 48])
+        records = runs_util.personal_records(runs, TZ, buckets)
+        self.assertIsNone(records["all"]["10k"])
+        self.assertEqual(records["2026"]["5k"]["run_id"], "3")
+        self.assertEqual(records["2026"]["5k"]["time_s"], 3000.0)
 
     def test_personal_records_empty(self):
         self.assertEqual(

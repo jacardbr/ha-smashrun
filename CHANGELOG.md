@@ -2,6 +2,9 @@
 
 ## 0.5.0
 
+- Card, **Personal Records → Performance**: clicking a tile shows the run behind the record below the tiles (date and time, location, distance, time, pace and its route drawn from the GPS track over Esri's Light Gray or Dark Gray Canvas map, following the theme, which the new `route_map` card option turns off); clicking it again hides it. The records now also carry the run's total time. The location comes from the new `ha_smashrun/run` WebSocket command, which reads the run from Smashrun once (`GET /my/activities/{id}`) and caches its location and its GPS track thinned to 400 points.
+- Card, **Personal Records → Performance**: a record is now the run's real time and pace, as raced (a 42.7 km marathon in 3:53:46 is a 3:53:46 42K), instead of its pace scaled to the exact distance.
+- Card, **Personal Records → Performance**: a record now only comes from runs of that distance's range (the Count tab's ranges, configurable in the card) that are at least the distance (1% GPS margin). A half marathon no longer counts as a 10K record.
 - **Sign in with email and password**: the setup now offers it beside pasting a token. Home Assistant gets the personal access token itself and a new one 7 days before it expires (or when Smashrun rejects it), so tokens no longer need pasting. A failed login opens a reauthentication asking for the password. **Reconfigure** switches between the two ways. Uses the login service behind Smashrun's authorization page (not part of the documented API). Diagnostics redact the email and password. A token from the login is taken to last at most 60 days (Smashrun's personal tokens), even when the login answers with a longer lifetime, so it is renewed at most 53 days after it was obtained; the **Token expires** sensor shows that date (the daily token check is ignored when it answers zero or less), and an early renewal happens at most once every 12 hours.
 
 ## 0.4.0

@@ -133,6 +133,8 @@ class SmashrunCoordinator(DataUpdateCoordinator[SmashrunData]):
         # login's answer when the integration got the token itself, else the
         # token check.
         self.token_expires: datetime | None = saved_token_expiry(entry)
+        # Location and track of runs the card asked about (by run id).
+        self.run_details: dict[str, dict[str, Any]] = {}
         self._full_at = 0.0
         self._stats_signature: tuple | None = None
 

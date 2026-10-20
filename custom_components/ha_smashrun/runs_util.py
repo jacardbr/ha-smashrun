@@ -234,14 +234,15 @@ def best_days(runs: Iterable[Any], tz: tzinfo) -> dict[str, dict[str, Any]]:
 
 
 def personal_records(
-    runs: Iterable[Any], tz: tzinfo
+    runs: Iterable[Any], tz: tzinfo, buckets: Optional[dict[str, tuple[float, float]]] = None
 ) -> dict[str, dict[str, Optional[dict[str, Any]]]]:
     """Fastest time per record distance, for all time ("all") and per local year.
 
-    Only whole-run totals are available, so the time for a distance is
-    estimated from the average pace of a run at least that long: a 12 km run
-    at 5:00/km counts as a 50:00 10K. For races of the exact distance this is
-    the real time.
+    A run only counts for the distance of its own range (the count buckets,
+    see `distance_bucket`): a half marathon is a 21K, never a 10K. It must
+    also be at least the distance, with 1% GPS margin. The record is the
+    run's real time and average pace, as raced: a marathon logged as 42.7 km
+    in 3:53:46 is a 3:53:46 42K (not scaled down to 42.195 km).
     """
     best: dict[str, dict[str, Optional[dict[str, Any]]]] = {}
 
@@ -256,20 +257,77 @@ def personal_records(
         year = str(run.start.astimezone(tz).year)
         best.setdefault(year, {k: None for k in RECORD_DISTANCES})
         pace = run.duration_s / run.distance_km  # seconds per km
+        bucket = distance_bucket(run.distance_km, buckets)
         for key, km in RECORD_DISTANCES.items():
-            if run.distance_km < km * RECORD_TOLERANCE:
+            if key != bucket or run.distance_km < km * RECORD_TOLERANCE:
                 continue
             record = {
                 "run_id": run.run_id,
                 "start": run.start.isoformat(),
-                "time_s": round(pace * km, 1),
+                "time_s": round(run.duration_s, 1),
                 "pace_s_per_km": round(pace, 1),
                 "run_distance_km": round(run.distance_km, 3),
+                "run_duration_s": round(run.duration_s, 1),
             }
             consider("all", key, record)
             consider(year, key, record)
     best.setdefault("all", {k: None for k in RECORD_DISTANCES})
     return best
+
+
+# Points kept from a run's track for the card (enough to draw it).
+TRACK_POINTS = 400
+
+
+def run_details(activity: dict[str, Any], max_points: int = TRACK_POINTS) -> dict[str, Any]:
+    """What the card shows about one run, from GET /my/activities/{id}.
+
+    The location (city, state, country) and a few summary values, plus the
+    GPS track thinned to at most `max_points` [latitude, longitude] pairs
+    (Smashrun records about one point per second; -1 marks a gap).
+    """
+
+    def text(key: str) -> Optional[str]:
+        value = activity.get(key)
+        return str(value).strip() if value not in (None, "") else None
+
+    def number(key: str) -> Optional[float]:
+        value = activity.get(key)
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+        return value if value != -1 else None
+
+    track: list[list[float]] = []
+    keys = activity.get("recordingKeys") or []
+    values = activity.get("recordingValues") or []
+    if "latitude" in keys and "longitude" in keys:
+        lats = values[keys.index("latitude")] if keys.index("latitude") < len(values) else []
+        lons = values[keys.index("longitude")] if keys.index("longitude") < len(values) else []
+        points = [
+            [round(lat, 6), round(lon, 6)]
+            for lat, lon in zip(lats, lons)
+            if isinstance(lat, (int, float)) and isinstance(lon, (int, float))
+            and -90 <= lat <= 90 and -180 <= lon <= 180 and (lat, lon) != (-1, -1)
+        ]
+        if len(points) > max_points:
+            step = (len(points) - 1) / (max_points - 1)
+            points = [points[round(i * step)] for i in range(max_points)]
+        track = points
+
+    return {
+        "city": text("city"),
+        "state": text("state"),
+        "country": text("country"),
+        "country_code": text("countryCode"),
+        "start_latitude": number("startLatitude"),
+        "start_longitude": number("startLongitude"),
+        "heart_rate_average": number("heartRateAverage"),
+        "elevation_gain": number("elevationGain"),
+        "temperature": number("temperature"),
+        "track": track,
+    }
 
 
 def runs_signature(runs: Iterable[Any]) -> tuple[tuple[str, Optional[float]], ...]:

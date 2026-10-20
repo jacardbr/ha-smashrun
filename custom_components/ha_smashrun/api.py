@@ -16,6 +16,8 @@ Only the read endpoints are used:
   - GET /my/activities/search/extended       latest run (summary + extended)
   - GET /my/activities/search/briefs         every run, paged (id/start/km/s)
   - GET /my/badges                           earned badges (undocumented shape)
+  - GET /my/activities/{id}                  one run in full (location, track),
+                                             only when the card asks for it
 """
 
 from __future__ import annotations
@@ -311,6 +313,14 @@ class SmashrunApi:
         if not isinstance(data, dict):
             return None
         return _num(data.get("expires_in", data.get("expiresIn")))
+
+    async def async_get_activity(self, run_id: str) -> dict[str, Any]:
+        """One run in full: its summary (city, state, country, heart rate...)
+        and its recordings (latitude, longitude... one point per second)."""
+        data = await self._get(f"my/activities/{run_id}")
+        if not isinstance(data, dict):
+            raise SmashrunError("Unexpected activity response")
+        return data
 
     async def async_get_userinfo(self) -> dict[str, Any]:
         data = await self._get("my/userinfo")
