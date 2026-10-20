@@ -106,6 +106,13 @@ It has three tabs:
 - **Personal records:** fastest time and pace for **5K, 10K, 21K and 42K**, in the years selected with the same year chips as the Statistics tab (every year, that is all time, at first), with the date, a dot in the color of the record's year and a link to the run.
 - **Count:** how many runs you did per distance, in the years selected with the year chips (every year at first): **<5K** under 4.5 km, **5K** from 4.5 to 9.5 km, **10K** from 9.5 to 20.5 km, **21K** from 20.5 to 41.5 km and **42K** from 41.5 to 48 km (each range includes its start and excludes its end). A **Total** tile adds up every range. Runs of 48 km or more are not counted.
 
+| Statistics | Personal records | Count |
+|---|---|---|
+| ![Statistics tab, light theme](docs/images/statistics-light.png) | ![Personal records tab, light theme](docs/images/records-light.png) | ![Count tab, light theme](docs/images/count-light.png) |
+| ![Statistics tab, dark theme](docs/images/statistics-dark.png) | ![Personal records tab, dark theme](docs/images/records-dark.png) | ![Count tab, dark theme](docs/images/count-dark.png) |
+
+_Screenshots with sample data, from `tests/card_test.html`._
+
 Distances follow the Home Assistant unit system (km or mi) and the texts follow its language (English or Portuguese).
 
 | Option | Default | |
