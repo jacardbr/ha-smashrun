@@ -314,6 +314,127 @@ class RunsUtilTests(unittest.TestCase):
         self.assertEqual(rows[1], (datetime(2026, 10, 12, 10, tzinfo=timezone.utc), 28.1, 3))
         self.assertEqual(rows[2][1:], (38.1, 4))
 
+    def test_sensor_statistics_totals(self):
+        cutoff = datetime(2026, 10, 20, 0, tzinfo=timezone.utc)
+        rows = runs_util.sensor_statistics(
+            self._runs(), count=False, period=None, cutoff=cutoff, anchor_sum=None, tz=TZ
+        )
+        # One row per hour with a run; state and sum are the running total.
+        self.assertEqual(
+            [(r[0].isoformat(), r[1], r[2], r[3]) for r in rows],
+            [
+                ("2025-12-31T09:00:00+00:00", 21.1, 21.1, None),
+                ("2026-10-12T10:00:00+00:00", 28.1, 28.1, None),
+                ("2026-10-19T09:00:00+00:00", 38.1, 38.1, None),
+            ],
+        )
+        counts = runs_util.sensor_statistics(
+            self._runs(), count=True, period=None, cutoff=cutoff, anchor_sum=None, tz=TZ
+        )
+        self.assertEqual([r[1] for r in counts], [1, 3, 4])
+
+    def test_sensor_statistics_only_before_cutoff_and_anchored(self):
+        # The recorder already has a row at 2026-10-19 09:00 UTC (the hour of
+        # run 3) with sum 1000: imported sums must end so that the change
+        # into that row is exactly run 3's 10 km.
+        cutoff = datetime(2026, 10, 19, 9, tzinfo=timezone.utc)
+        rows = runs_util.sensor_statistics(
+            self._runs(), count=False, period=None, cutoff=cutoff, anchor_sum=1000.0, tz=TZ
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r[0] < cutoff for r in rows))
+        self.assertAlmostEqual(rows[-1][2], 990.0)
+        self.assertAlmostEqual(rows[-1][2] - rows[0][2], 7.0)
+        self.assertEqual(rows[-1][1], 28.1)  # state is not shifted
+
+    def test_sensor_statistics_periods_reset(self):
+        cutoff = datetime(2026, 10, 20, 0, tzinfo=timezone.utc)
+        rows = runs_util.sensor_statistics(
+            self._runs(), count=False, period="week", cutoff=cutoff, anchor_sum=None, tz=TZ
+        )
+        by_hour = {r[0]: r for r in rows}
+        # Run 4 (Wed 2025-12-31) alone in its week.
+        r4 = by_hour[datetime(2025, 12, 31, 9, tzinfo=timezone.utc)]
+        self.assertEqual(r4[1], 21.1)
+        self.assertEqual(r4[3], datetime(2025, 12, 29, tzinfo=TZ))
+        # Monday 2026-10-12 local midnight = 03:00 UTC: a new week starts at 0.
+        monday = by_hour[datetime(2026, 10, 12, 3, tzinfo=timezone.utc)]
+        self.assertEqual(monday[1], 0.0)
+        self.assertEqual(monday[3], datetime(2026, 10, 12, tzinfo=TZ))
+        # Runs 1 and 2 later that Monday add up within the week.
+        self.assertEqual(by_hour[datetime(2026, 10, 12, 10, tzinfo=timezone.utc)][1], 7.0)
+        # Every week between the first run and the cutoff has a boundary row.
+        boundaries = [r for r in rows if r[0] == runs_util._utc_hour(r[3])]
+        self.assertEqual(len(boundaries), 43)
+        # The sum never decreases: it is the all-time distance.
+        sums = [r[2] for r in rows]
+        self.assertEqual(sums, sorted(sums))
+        self.assertEqual(sums[-1], 38.1)
+
+        years = runs_util.sensor_statistics(
+            self._runs(), count=True, period="year", cutoff=cutoff, anchor_sum=None, tz=TZ
+        )
+        self.assertEqual(
+            [(r[0].year, r[1]) for r in years],
+            [(2025, 0.0), (2025, 1.0), (2026, 0.0), (2026, 2.0), (2026, 3.0)],
+        )
+
+    def test_sensor_statistics_empty(self):
+        cutoff = datetime(2026, 10, 20, tzinfo=timezone.utc)
+        self.assertEqual(
+            runs_util.sensor_statistics([], count=False, period="week", cutoff=cutoff, anchor_sum=None, tz=TZ),
+            [],
+        )
+
+    def test_yearly_summary(self):
+        years = runs_util.yearly_summary(self._runs(), TZ)
+        self.assertEqual(list(years), ["2025", "2026"])
+        self.assertEqual(years["2025"]["runs"], 1)
+        self.assertEqual(years["2025"]["months_km"][11], 21.1)
+        self.assertEqual(years["2026"]["months_km"][9], 17.0)
+        self.assertEqual(sum(years["2026"]["months_km"]), 17.0)
+
+    def test_yearly_summary_uses_local_year(self):
+        # 2026-01-01 01:00 UTC is still New Year's Eve 2025 at UTC-3.
+        run_ = api.SmashrunRun.from_json(
+            {"runId": 9, "startTime": "2026-01-01T01:00:00Z", "distance": 3, "duration": 900}, TZ
+        )
+        self.assertEqual(list(runs_util.yearly_summary([run_], TZ)), ["2025"])
+
+    def test_personal_records(self):
+        runs = self._runs()
+        runs.append(
+            api.SmashrunRun.from_json(  # a fast 4.96 km run: counts as a 5K (GPS)
+                {"runId": 5, "startTime": "2026-03-01T07:00:00-03:00", "distance": 4.96, "duration": 1240}, TZ
+            )
+        )
+        records = runs_util.personal_records(runs, TZ)
+        five = records["all"]["5k"]
+        self.assertEqual(five["run_id"], "5")
+        self.assertEqual(five["pace_s_per_km"], 250.0)
+        self.assertEqual(five["time_s"], 1250.0)
+        # 10K: the half marathon (21.1 km in 1:45:00, 4:58.6/km) beats run 3
+        # (10 km in 50:00): a longer run can hold a shorter record.
+        self.assertEqual(records["all"]["10k"]["run_id"], "4")
+        self.assertAlmostEqual(records["all"]["10k"]["time_s"], 6300 / 21.1 * 10, places=0)
+        # Within 2026 only, run 3 is the best 10K.
+        self.assertEqual(records["2026"]["10k"]["run_id"], "3")
+        self.assertEqual(records["2026"]["10k"]["time_s"], 3000.0)
+        # 21K: only run 4 is long enough; 42K: nobody.
+        self.assertEqual(records["all"]["21k"]["run_id"], "4")
+        self.assertAlmostEqual(records["all"]["21k"]["time_s"], 6300 / 21.1 * 21.0975, places=0)
+        self.assertIsNone(records["all"]["42k"])
+        # Per year.
+        self.assertEqual(records["2025"]["5k"]["run_id"], "4")
+        self.assertIsNone(records["2026"]["21k"])
+        self.assertEqual(records["2026"]["5k"]["run_id"], "5")
+
+    def test_personal_records_empty(self):
+        self.assertEqual(
+            runs_util.personal_records([], TZ),
+            {"all": {"5k": None, "10k": None, "21k": None, "42k": None}},
+        )
+
     def test_signature_changes_with_edits(self):
         runs = self._runs()
         before = runs_util.runs_signature(runs)

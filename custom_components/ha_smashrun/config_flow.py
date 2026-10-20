@@ -10,6 +10,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
@@ -31,6 +32,7 @@ from .api import (
     clean_token,
 )
 from .const import (
+    CONF_IMPORT_HISTORY,
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -47,6 +49,9 @@ _TOKEN_SCHEMA = vol.Schema(
             TextSelectorConfig(type=TextSelectorType.PASSWORD)
         )
     }
+)
+_USER_SCHEMA = _TOKEN_SCHEMA.extend(
+    {vol.Required(CONF_IMPORT_HISTORY, default=True): bool}
 )
 
 
@@ -91,12 +96,18 @@ class SmashrunConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
                 return self.async_create_entry(
                     title=f"Smashrun ({name or user['id']})",
-                    data={CONF_ACCESS_TOKEN: token},
+                    data={
+                        CONF_ACCESS_TOKEN: token,
+                        CONF_IMPORT_HISTORY: user_input.get(CONF_IMPORT_HISTORY, False),
+                    },
                 )
 
         return self.async_show_form(
             step_id="user",
-            data_schema=_TOKEN_SCHEMA,
+            data_schema=self.add_suggested_values_to_schema(
+                _USER_SCHEMA,
+                {k: v for k, v in (user_input or {}).items() if k != CONF_ACCESS_TOKEN},
+            ),
             errors=errors,
             description_placeholders={"token_url": TOKEN_URL},
         )
@@ -151,9 +162,16 @@ class SmashrunConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class SmashrunOptionsFlow(OptionsFlow):
-    """Update interval."""
+    """Options menu: update interval, and a button to import the history."""
 
     async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self.async_show_menu(
+            step_id="init", menu_options=["settings", "import_history"]
+        )
+
+    async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
@@ -172,4 +190,36 @@ class SmashrunOptionsFlow(OptionsFlow):
                 )
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
+        return self.async_show_form(step_id="settings", data_schema=schema)
+
+    async def async_step_import_history(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm, then import every past run into the sensors' statistics."""
+        if self.config_entry.state is not ConfigEntryState.LOADED:
+            return self.async_abort(reason="not_loaded")
+
+        if user_input is None:
+            return self.async_show_form(
+                step_id="import_history", data_schema=vol.Schema({})
+            )
+
+        from .history import async_import_history
+
+        try:
+            result = await async_import_history(self.hass, self.config_entry)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Smashrun history import failed")
+            return self.async_show_form(
+                step_id="import_history",
+                data_schema=vol.Schema({}),
+                errors={"base": "import_failed"},
+            )
+
+        return self.async_abort(
+            reason="import_done",
+            description_placeholders={
+                "runs": str(result["runs_found"]),
+                "points": str(sum(result["statistics_imported"].values())),
+            },
+        )

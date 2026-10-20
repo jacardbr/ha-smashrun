@@ -12,6 +12,9 @@ TOKEN_URL = (
 )
 
 CONF_SCAN_INTERVAL = "scan_interval"
+CONF_IMPORT_HISTORY = "import_history"  # one-shot flag set by the setup form
+# Per entity: first hour owned by the recorder (the import writes before it).
+CONF_STATS_CUTOFFS = "statistics_cutoffs"
 
 DEFAULT_SCAN_INTERVAL = 30  # minutes
 MIN_SCAN_INTERVAL = 5  # minutes

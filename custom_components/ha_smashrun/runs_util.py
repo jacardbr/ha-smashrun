@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any, Optional
 
 KM_PER_MILE = 1.609344
@@ -60,6 +61,138 @@ def hourly_cumulative(runs: Iterable[Any]) -> list[tuple[datetime, float, int]]:
         count += int(buckets[hour][1])
         rows.append((hour, round(km, 3), count))
     return rows
+
+
+_HOUR = timedelta(hours=1)
+# Any date in the next period, from a period start.
+_NEXT_PERIOD = {"week": timedelta(days=7), "month": timedelta(days=32), "year": timedelta(days=366)}
+
+
+def _utc_hour(moment: datetime) -> datetime:
+    return moment.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+
+def sensor_statistics(
+    runs: Iterable[Any],
+    *,
+    count: bool,
+    period: Optional[str],
+    cutoff: datetime,
+    anchor_sum: Optional[float],
+    tz: tzinfo,
+) -> list[tuple[datetime, float, float, Optional[datetime]]]:
+    """Hourly statistics rows for one history sensor, for the hours before `cutoff`.
+
+    Returns (hour start UTC, state, sum, last_reset) rows, oldest first, for:
+      - the "total" sensors (`period=None`): state = all-time total;
+      - the "this week/month/year" sensors: state = total within the period,
+        last_reset = period start, plus a row at every period start so the
+        state drops to zero when a new period begins.
+
+    `count` selects run counts instead of kilometres. A row describes the end
+    of its hour, as the recorder does: a run counts in the hour it started.
+
+    `cutoff` is the first hour already compiled by the recorder (or the current
+    hour). When the recorder has a row there, `anchor_sum` is its `sum`; the
+    imported sums are shifted so they end exactly where the recorder's begin,
+    which keeps the "change" of every period correct across the boundary.
+    """
+    dated = sorted(
+        (r.start, 1.0 if count else (r.distance_km or 0.0))
+        for r in runs
+        if r.start is not None
+    )
+    if not dated:
+        return []
+    starts = [start for start, _ in dated]
+    prefix = [0.0]
+    for _, amount in dated:
+        prefix.append(prefix[-1] + amount)
+
+    def total_before(moment: datetime) -> float:
+        return prefix[bisect_left(starts, moment)]
+
+    hours = {_utc_hour(start) for start in starts}
+    if period is not None:
+        boundary = period_start(starts[0].astimezone(tz), period)
+        while _utc_hour(boundary) < cutoff:
+            hours.add(_utc_hour(boundary))
+            boundary = period_start(boundary + _NEXT_PERIOD[period], period)
+
+    offset = 0.0
+    if anchor_sum is not None:
+        offset = anchor_sum - total_before(cutoff + _HOUR)
+
+    rows: list[tuple[datetime, float, float, Optional[datetime]]] = []
+    for hour in sorted(h for h in hours if h < cutoff):
+        total = total_before(hour + _HOUR)
+        if period is None:
+            state, last_reset = total, None
+        else:
+            last_reset = period_start(hour.astimezone(tz), period)
+            state = total - total_before(last_reset)
+        rows.append((hour, round(state, 3), round(total + offset, 3), last_reset))
+    return rows
+
+
+# Personal record distances: key -> km.
+RECORD_DISTANCES = {"5k": 5.0, "10k": 10.0, "21k": 21.0975, "42k": 42.195}
+# GPS tracks often come out a little short: a 4.96 km run still counts as a 5K.
+RECORD_TOLERANCE = 0.99
+
+
+def yearly_summary(runs: Iterable[Any], tz: tzinfo) -> dict[str, dict[str, Any]]:
+    """Per local year: kilometres per month (12 values) and the run count."""
+    years: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        if run.start is None:
+            continue
+        local = run.start.astimezone(tz)
+        year = years.setdefault(str(local.year), {"months_km": [0.0] * 12, "runs": 0})
+        year["months_km"][local.month - 1] += run.distance_km or 0.0
+        year["runs"] += 1
+    for year in years.values():
+        year["months_km"] = [round(km, 3) for km in year["months_km"]]
+    return dict(sorted(years.items()))
+
+
+def personal_records(
+    runs: Iterable[Any], tz: tzinfo
+) -> dict[str, dict[str, Optional[dict[str, Any]]]]:
+    """Fastest time per record distance, for all time ("all") and per local year.
+
+    Only whole-run totals are available, so the time for a distance is
+    estimated from the average pace of a run at least that long: a 12 km run
+    at 5:00/km counts as a 50:00 10K. For races of the exact distance this is
+    the real time.
+    """
+    best: dict[str, dict[str, Optional[dict[str, Any]]]] = {}
+
+    def consider(scope: str, key: str, record: dict[str, Any]) -> None:
+        current = best.setdefault(scope, {k: None for k in RECORD_DISTANCES}).get(key)
+        if current is None or record["time_s"] < current["time_s"]:
+            best[scope][key] = record
+
+    for run in runs:
+        if run.start is None or not run.distance_km or not run.duration_s:
+            continue
+        year = str(run.start.astimezone(tz).year)
+        best.setdefault(year, {k: None for k in RECORD_DISTANCES})
+        pace = run.duration_s / run.distance_km  # seconds per km
+        for key, km in RECORD_DISTANCES.items():
+            if run.distance_km < km * RECORD_TOLERANCE:
+                continue
+            record = {
+                "run_id": run.run_id,
+                "start": run.start.isoformat(),
+                "time_s": round(pace * km, 1),
+                "pace_s_per_km": round(pace, 1),
+                "run_distance_km": round(run.distance_km, 3),
+            }
+            consider("all", key, record)
+            consider(year, key, record)
+    best.setdefault("all", {k: None for k in RECORD_DISTANCES})
+    return best
 
 
 def runs_signature(runs: Iterable[Any]) -> tuple[tuple[str, Optional[float]], ...]:

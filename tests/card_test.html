@@ -1,0 +1,213 @@
+<!doctype html>
+<!--
+  Browser test for frontend/ha-smashrun-card.js. Run headless (Chrome or Edge):
+
+    "<browser>" --headless --disable-gpu --dump-dom \
+      --virtual-time-budget=5000 file:///.../tests/card_test.html | grep RESULT
+
+  The page prints "RESULT: PASS (n checks)" or "RESULT: FAIL ..." in #out.
+  Add ?demo=statistics|records|list (and &lang=pt, &theme=dark, &units=mi, &w=340)
+  to show one card for a screenshot instead of running the checks.
+-->
+<html><head><meta charset="utf-8">
+<style>
+  body { font-family: Roboto, "Helvetica Neue", Arial, sans-serif; margin: 16px; width: 520px;
+    --primary-color: #03a9f4; --primary-text-color: #212121; --secondary-text-color: #727272;
+    --divider-color: rgba(0,0,0,.12); --card-background-color: #fff; background: #fafafa; }
+  body.dark { --primary-text-color: #e1e1e1; --secondary-text-color: #9b9b9b;
+    --divider-color: rgba(225,225,225,.12); --card-background-color: #1c1c1c; background: #111; }
+  ha-card { display: block; background: var(--card-background-color); border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+</style></head>
+<body><pre id="out">RUNNING</pre><div id="stage"></div>
+<script>
+// ---- stubs for what Home Assistant provides ---------------------------------
+customElements.define("ha-card", class extends HTMLElement {});
+customElements.define("ha-icon", class extends HTMLElement {
+  connectedCallback() { this.textContent = "↗"; }
+});
+</script>
+<script src="../custom_components/ha_smashrun/frontend/ha-smashrun-card.js"></script>
+<script>
+const failures = [];
+let checks = 0;
+const ok = (cond, msg) => { checks++; if (!cond) failures.push(msg); };
+const eq = (a, b, msg) => ok(JSON.stringify(a) === JSON.stringify(b), `${msg}: got ${JSON.stringify(a)} expected ${JSON.stringify(b)}`);
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+const params = new URLSearchParams(location.search);
+const thisYear = new Date().getFullYear();
+
+// Deterministic fake data: four years, more distance every year.
+function months(year, base) {
+  const last = year === thisYear ? new Date().getMonth() : 11;
+  return Array.from({ length: 12 }, (_, i) => (i <= last ? Math.round((base + 15 * Math.sin(i + year)) * 10) / 10 : 0));
+}
+const years = {};
+[thisYear - 3, thisYear - 2, thisYear - 1, thisYear].forEach((y, i) => {
+  const m = months(y, 60 + 25 * i);
+  years[String(y)] = { months_km: m, runs: Math.round(m.reduce((a, b) => a + b, 0) / 8) };
+});
+const rec = (id, date, time, pace, dist) => ({
+  run_id: id, start: date, time_s: time, pace_s_per_km: pace, run_distance_km: dist,
+  url: `https://smashrun.com/runner/run/${id}`,
+});
+const SUMMARY = {
+  username: "runner",
+  years,
+  record_distances: { "5k": 5, "10k": 10, "21k": 21.0975, "42k": 42.195 },
+  records: {
+    all: {
+      "5k": rec("501", `${thisYear - 1}-05-10T07:00:00-03:00`, 1290, 258, 5.02),
+      "10k": rec("502", `${thisYear}-03-02T07:00:00-03:00`, 2735, 273.5, 12.4),
+      "21k": rec("503", `${thisYear - 1}-08-20T07:00:00-03:00`, 6110, 289.6, 21.12),
+      "42k": null,
+    },
+    [String(thisYear)]: {
+      "5k": rec("601", `${thisYear}-02-01T07:00:00-03:00`, 1320, 264, 5.0),
+      "10k": rec("502", `${thisYear}-03-02T07:00:00-03:00`, 2735, 273.5, 12.4),
+      "21k": null, "42k": null,
+    },
+  },
+  recent: Array.from({ length: 10 }, (_, i) => ({
+    run_id: String(900 - i),
+    start: new Date(Date.UTC(thisYear, 0, 28 - 2 * i, 10)).toISOString(),
+    distance_km: 5 + (i % 4) * 2.5,
+    duration_s: (5 + (i % 4) * 2.5) * (330 - i * 3),
+    url: `https://smashrun.com/runner/run/${900 - i}`,
+  })),
+};
+
+function makeHass({ lang = "en", units = "km", runs = "42", fail = false } = {}) {
+  const calls = [];
+  return {
+    calls,
+    language: lang,
+    locale: { language: lang },
+    config: { unit_system: { length: units } },
+    entities: {
+      "sensor.smashrun_total_runs": { entity_id: "sensor.smashrun_total_runs", platform: "ha_smashrun", translation_key: "total_runs" },
+      "sensor.other_total_runs": { entity_id: "sensor.other_total_runs", platform: "strava", translation_key: "total_runs" },
+    },
+    states: {
+      "sensor.smashrun_total_runs": { state: runs },
+      "sensor.other_total_runs": { state: "1" },
+    },
+    callWS: async (msg) => {
+      calls.push(msg);
+      if (fail) throw { code: "not_found", message: "Smashrun is not set up" };
+      return JSON.parse(JSON.stringify(SUMMARY));
+    },
+  };
+}
+
+function mount(config, hass) {
+  const card = document.createElement("ha-smashrun-card");
+  card.setConfig(config);
+  document.getElementById("stage").append(card);
+  card.hass = hass;
+  return card;
+}
+const $ = (card, sel) => card.shadowRoot.querySelector(sel);
+const $$ = (card, sel) => [...card.shadowRoot.querySelectorAll(sel)];
+
+async function demo() {
+  document.getElementById("out").remove();
+  if (params.get("theme") === "dark") document.body.classList.add("dark");
+  if (params.get("w")) document.body.style.width = `${params.get("w")}px`;
+  mount(
+    { title: "Smashrun", default_tab: params.get("demo") },
+    makeHass({ lang: params.get("lang") || "en", units: params.get("units") || "km" })
+  );
+}
+
+async function run() {
+  // Loads once, renders the statistics tab with the last 3 years selected.
+  let hass = makeHass();
+  let card = mount({}, hass);
+  await tick(); await tick();
+  eq(hass.calls, [{ type: "ha_smashrun/summary" }], "one WebSocket call");
+  eq($$(card, ".tab").map((b) => b.textContent), ["Statistics", "Personal records", "List"], "tab labels");
+  ok($(card, ".tab.active").dataset.tab === "statistics", "statistics is the default tab");
+  eq($$(card, ".chip.on").map((c) => c.dataset.year), [thisYear, thisYear - 1, thisYear - 2].map(String), "last 3 years selected");
+  eq($$(card, ".chart path").length, 3, "one line per selected year");
+  eq($$(card, ".table tbody tr").length, 4, "year table lists every year");
+
+  // Toggling a year adds a line; monthly mode keeps the lines.
+  $(card, `.chip[data-year="${thisYear - 3}"]`).click();
+  eq($$(card, ".chart path").length, 4, "selecting a year adds its line");
+  $(card, '[data-mode="monthly"]').click();
+  ok($(card, '[data-mode="monthly"]').classList.contains("on"), "monthly mode on");
+  eq($$(card, ".chart path").length, 4, "monthly keeps the lines");
+  $(card, `.chip[data-year="${thisYear}"]`).click();
+  eq($$(card, ".chart path").length, 3, "deselecting removes a line");
+
+  // Same hass state: no reload. A new run changes the sensor: reload.
+  card.hass = hass;
+  await tick();
+  eq(hass.calls.length, 1, "no reload without a change");
+  const hass2 = makeHass({ runs: "43" });
+  card.hass = hass2;
+  await tick(); await tick();
+  eq(hass2.calls.length, 1, "reload after a new run");
+
+  // Records tab: all time by default, year filter switches the scope.
+  $(card, '[data-tab="records"]').click();
+  eq($$(card, ".tile .label").map((l) => l.textContent), ["5K", "10K", "21K", "42K"], "record distances");
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["21:30", "45:35", "1:41:50", "—"], "all-time times");
+  ok($$(card, ".tile .pace")[0].textContent === "4:18 /km", "pace per km");
+  ok($$(card, ".tile .meta")[1].textContent.includes("12.4 km"), "longer run is mentioned");
+  ok(!$$(card, ".tile .meta")[0].textContent.includes("run"), "a ~5 km run is not called longer");
+  ok($(card, ".tile a").href.endsWith("/run/501"), "record links to the run");
+  const select = $(card, "select.record-year");
+  eq([...select.options].map((o) => o.value), ["all", ...[0, 1, 2, 3].map((i) => String(thisYear - i))], "year options");
+  select.value = String(thisYear);
+  select.dispatchEvent(new Event("change"));
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["22:00", "45:35", "—", "—"], "times for this year");
+  const sel2 = $(card, "select.record-year");
+  sel2.value = String(thisYear - 3); // a year without records
+  sel2.dispatchEvent(new Event("change"));
+  ok($(card, "select.record-year").value === "all", "unknown year falls back to all time");
+  ok($(card, ".note").textContent.includes("average pace"), "estimate note");
+
+  // List tab: 10 runs, newest first, with links.
+  $(card, '[data-tab="list"]').click();
+  eq($$(card, ".list tbody tr").length, 10, "ten runs");
+  ok($$(card, ".list tbody tr")[0].textContent.includes("5.00 km"), "distance with 2 decimals");
+  eq($$(card, ".list a").length, 10, "each run links to Smashrun");
+
+  // Miles and Portuguese.
+  hass = makeHass({ lang: "pt-BR", units: "mi" });
+  card = mount({ default_tab: "records" }, hass);
+  await tick(); await tick();
+  eq($$(card, ".tab").map((b) => b.textContent), ["Estatísticas", "Recordes pessoais", "Lista"], "Portuguese tabs");
+  ok($$(card, ".tile .pace")[0].textContent === "6:55 /mi", "pace per mile");
+  ok($$(card, ".tile .meta")[1].textContent.includes("7,7 mi"), "longer run in miles, pt decimals");
+
+  // Errors are shown, not thrown.
+  hass = makeHass({ fail: true });
+  card = mount({}, hass);
+  await tick(); await tick();
+  ok($(card, ".empty").textContent.includes("Smashrun is not set up"), "error message");
+
+  // Config validation and entry_id.
+  let threw = false;
+  try { document.createElement("ha-smashrun-card").setConfig({ default_tab: "nope" }); } catch (e) { threw = true; }
+  ok(threw, "invalid default_tab is rejected");
+  hass = makeHass();
+  card = mount({ entry_id: "abc" }, hass);
+  await tick();
+  eq(hass.calls[0], { type: "ha_smashrun/summary", entry_id: "abc" }, "entry_id is sent");
+  ok(window.customCards.some((c) => c.type === "ha-smashrun-card"), "registered in the card picker");
+
+  document.getElementById("out").textContent = failures.length
+    ? `RESULT: FAIL (${failures.length}/${checks})\n` + failures.join("\n")
+    : `RESULT: PASS (${checks} checks)`;
+  document.getElementById("stage").remove();
+}
+
+(params.get("demo") ? demo() : run()).catch((e) => {
+  document.getElementById("out").textContent = "RESULT: FAIL (exception) " + e + "\n" + e.stack;
+});
+</script>
+</body></html>

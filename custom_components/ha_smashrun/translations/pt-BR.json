@@ -5,7 +5,11 @@
         "title": "Token de acesso pessoal do Smashrun",
         "description": "Com o Smashrun logado, abra [esta página do Smashrun]({token_url}), autorize o acesso e copie o token de acesso exibido. Você pode colar só o token ou o endereço inteiro que contém `access_token=`. O token dura cerca de 60 dias; quando vencer, o Home Assistant pede um novo.",
         "data": {
-          "access_token": "Token de acesso"
+          "access_token": "Token de acesso",
+          "import_history": "Importar todo o histórico de corridas"
+        },
+        "data_description": {
+          "import_history": "Preenche as estatísticas de longo prazo dos sensores de histórico (distância e corridas totais, distância e corridas na semana/mês/ano) com todas as corridas desde a primeira, em segundo plano, para os gráficos não começarem hoje. Também dá para rodar depois em Configurar ou com a ação ha_smashrun.import_history."
         }
       },
       "reauth_confirm": {
@@ -39,13 +43,31 @@
     "step": {
       "init": {
         "title": "Opções do Smashrun",
+        "menu_options": {
+          "settings": "Alterar intervalo de atualização",
+          "import_history": "Importar histórico agora"
+        }
+      },
+      "settings": {
+        "title": "Intervalo de atualização",
         "data": {
           "scan_interval": "Intervalo de atualização (minutos)"
         },
         "data_description": {
           "scan_interval": "Com que frequência procurar uma corrida nova. O histórico completo e os badges só são lidos de novo quando aparece uma corrida nova (e uma vez por dia)."
         }
+      },
+      "import_history": {
+        "title": "Importar histórico",
+        "description": "Lê todas as corridas da sua conta do Smashrun e grava as estatísticas passadas dos sensores de histórico (distância e corridas totais, distância e corridas na semana/mês/ano). Só é gravado o período anterior ao início da gravação pela integração, então pode rodar mais de uma vez sem problema. Clique em Enviar para começar."
       }
+    },
+    "error": {
+      "import_failed": "A importação falhou. Veja os detalhes no log do Home Assistant."
+    },
+    "abort": {
+      "import_done": "Pronto. Foram encontradas {runs} corridas e gravados {points} pontos de estatística por hora. Eles aparecem nos gráficos de estatística dos sensores.",
+      "not_loaded": "A integração não está carregada. Resolva a conexão primeiro (veja as notificações) e tente de novo."
     }
   },
   "entity": {
@@ -102,6 +124,18 @@
       },
       "token_expires": {
         "name": "Validade do token"
+      }
+    }
+  },
+  "services": {
+    "import_history": {
+      "name": "Importar histórico",
+      "description": "Lê todas as corridas da sua conta do Smashrun e grava as estatísticas de longo prazo passadas dos sensores de histórico, para os gráficos voltarem até a primeira corrida. Pode rodar mais de uma vez sem problema.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Conta do Smashrun",
+          "description": "Qual conta do Smashrun importar. Deixe vazio para importar todas as contas configuradas."
+        }
       }
     }
   }

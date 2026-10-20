@@ -67,6 +67,9 @@ class SmashrunCoordinator(DataUpdateCoordinator[SmashrunData]):
         self.api = api
         self.user = user
         self.uid = str(user["id"])
+        # Snapshot used to tell option changes apart from other entry updates
+        # (the history import's flag and cutoffs) when deciding to reload.
+        self.options = dict(entry.options)
         # When the personal access token stops working (about 60 days).
         self.token_expires: datetime | None = None
         self._full_at = 0.0

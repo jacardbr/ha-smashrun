@@ -5,7 +5,11 @@
         "title": "Smashrun personal access token",
         "description": "Open [this Smashrun page]({token_url}) while signed in to Smashrun, allow access and copy the access token it shows. You can paste the token alone or the whole address that contains `access_token=`. The token lasts about 60 days; when it expires, Home Assistant asks you for a new one.",
         "data": {
-          "access_token": "Access token"
+          "access_token": "Access token",
+          "import_history": "Import the whole run history"
+        },
+        "data_description": {
+          "import_history": "Fills the long-term statistics of the history sensors (total distance and runs, distance and runs this week/month/year) with every run since your first one, in the background, so their graphs do not start today. You can also run it later from Configure or with the ha_smashrun.import_history action."
         }
       },
       "reauth_confirm": {
@@ -39,13 +43,31 @@
     "step": {
       "init": {
         "title": "Smashrun options",
+        "menu_options": {
+          "settings": "Change update interval",
+          "import_history": "Import history now"
+        }
+      },
+      "settings": {
+        "title": "Update interval",
         "data": {
           "scan_interval": "Update interval (minutes)"
         },
         "data_description": {
           "scan_interval": "How often to check for a new run. The full history and the badges are only read again when a new run shows up (and once a day)."
         }
+      },
+      "import_history": {
+        "title": "Import history",
+        "description": "Reads every run in your Smashrun account and writes the past statistics of the history sensors (total distance and runs, distance and runs this week/month/year). Only the time before the integration started recording is written, so it is safe to run more than once. Select Submit to start."
       }
+    },
+    "error": {
+      "import_failed": "The import failed. Check the Home Assistant log for details."
+    },
+    "abort": {
+      "import_done": "Done. Found {runs} runs and wrote {points} hourly statistics points. They appear in the sensors' statistics graphs.",
+      "not_loaded": "The integration is not loaded. Fix its connection first (see the notifications), then try again."
     }
   },
   "entity": {
@@ -102,6 +124,18 @@
       },
       "token_expires": {
         "name": "Token expires"
+      }
+    }
+  },
+  "services": {
+    "import_history": {
+      "name": "Import history",
+      "description": "Reads every run in your Smashrun account and writes the past long-term statistics of the history sensors, so their graphs go back to your first run. Safe to run more than once.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Smashrun account",
+          "description": "Which Smashrun account to import. Leave empty to import all configured accounts."
+        }
       }
     }
   }

@@ -24,13 +24,13 @@ Personal tokens **expire after about 60 days** and cannot be renewed automatical
 1. Click the button above, or add it by hand: **HACS → ⋮ → Custom repositories**, paste `https://github.com/jacardbr/ha-smashrun`, category **Integration**, then **Add**.
 2. Search for **Smashrun** in HACS and download it.
 3. **Restart Home Assistant.**
-4. Go to **Settings → Devices & services → Add integration → Smashrun** and paste your access token.
+4. Go to **Settings → Devices & services → Add integration → Smashrun** and paste your access token. Leave **Import the whole run history** checked to fill the sensors' graphs with your past runs (see [Importing history](#importing-history)).
 
 Manual installation (without HACS): copy `custom_components/ha_smashrun` to `<your /config>/custom_components/ha_smashrun` and restart.
 
 ## Options
 
-**Configure** on the integration sets the update interval (5 to 1440 minutes, default 30).
+**Configure** on the integration opens a menu with **Change update interval** (5 to 1440 minutes, default 30) and **Import history now**.
 
 ## Entities
 
@@ -92,9 +92,44 @@ automation:
 
 (Adjust the `entity_id` to the one shown in your Home Assistant.)
 
-## Long-term statistics (full history)
+## Lovelace card
 
-The integration writes two statistics with your **whole** history, from your first run:
+The integration ships a card and loads it automatically (no resource to add). Add it from the dashboard editor (search for **Smashrun**) or with:
+
+```yaml
+type: custom:ha-smashrun-card
+```
+
+It has three tabs:
+
+- **Statistics:** distance through the year with one line per year, **cumulative** (the classic year-over-year comparison) or **monthly**. Tap the year chips to choose which years are compared (the last three at first). Below, a table with each year's distance, number of runs, distance per run and the change from the previous year; the year in progress is compared with the same months of the previous one.
+- **Personal records:** fastest time and pace for **5K, 10K, 21K and 42K**, for all time or for one year (selector at the top), with the date and a link to the run.
+- **List:** the last 10 runs with date, distance, time and pace, each linking to the run on Smashrun.
+
+Distances follow the Home Assistant unit system (km or mi) and the texts follow its language (English or Portuguese).
+
+| Option | Default | |
+|---|---|---|
+| `title` | none | Card title |
+| `default_tab` | `statistics` | `statistics`, `records` or `list` |
+| `entry_id` | first account | Which Smashrun account, when more than one is configured |
+
+**How personal records are calculated.** The Smashrun API gives each run's total distance and time, but not its splits (reading the splits of every run would exceed the 250 requests per hour of a personal token). So the record for a distance is estimated from the **average pace of runs at least that long**: a half marathon run in 1:45:00 counts as 1:45:00 for 21K, and a 12 km run at 5:00/km counts as 50:00 for 10K. Runs up to 1% short also count (GPS tracks often come out a little short). For races of the exact distance it is the real time; your true best 5K inside a longer run may be faster than shown.
+
+## Importing history
+
+Home Assistant only records a sensor from the moment it exists, so without help the graphs of **Total distance**, **Total runs** and the **this week / month / year** sensors would start on the day you add the integration.
+
+The import fills in the past: it reads every run in your Smashrun account and writes the hourly long-term statistics of those sensors back to your first run. Statistics graphs then show, for example, your distance per week or month across your whole history, straight from the sensors.
+
+- **At setup:** **Import the whole run history** is checked by default. It runs once, in the background, and unchecks itself when it finishes. If it fails (for example, no internet), it is retried the next time the integration loads.
+- **Later:** **Configure → Import history now**, or the `ha_smashrun.import_history` action (optionally with `config_entry_id`).
+
+Only the time **before** the recorder's own statistics for each sensor is written, and the imported values are aligned with them, so the totals do not jump at the boundary and it is safe to run the import more than once. Only enabled sensors are imported: if you enable **Runs this week** later, run the import again.
+
+## External statistics (full history)
+
+Independently of the import, the integration also keeps two statistics of its own with your **whole** history, from your first run:
 
 - `ha_smashrun:distance_<your Smashrun id>`: distance (km)
 - `ha_smashrun:runs_<your Smashrun id>`: number of runs
@@ -126,3 +161,12 @@ The API client and the run helpers have tests that run with the standard library
 ```sh
 python3 -m unittest discover -s tests -v
 ```
+
+The card has a browser test (Chrome or Edge, headless):
+
+```sh
+"<browser>" --headless --disable-gpu --dump-dom --virtual-time-budget=5000 \
+  "file://$PWD/tests/card_test.html" | grep -o 'RESULT: [A-Z]*[^<]*'
+```
+
+Open `tests/card_test.html?demo=statistics` (or `records`, `list`; add `&lang=pt-BR`, `&theme=dark`, `&units=mi`, `&w=340`) to see the card with sample data.
