@@ -102,16 +102,16 @@ type: custom:ha-smashrun-card
 
 It has three tabs:
 
-- **Statistics:** distance through the year with one line per year, **cumulative** (the classic year-over-year comparison) or **monthly**. Tap the year chips to choose which years are compared (the last three at first). Below, a table with each year's distance, number of runs, distance per run and the change from the previous year; the year in progress is compared with the same months of the previous one.
-- **Personal records:** fastest time and pace for **5K, 10K, 21K and 42K**, for all time or for one year (selector at the top), with the date and a link to the run.
-- **List:** the last 10 runs with date, distance, time and pace, each linking to the run on Smashrun.
+- **Statistics:** distance through the year with one line per year, **cumulative** (the classic year-over-year comparison) or **monthly**. Tap the year chips to choose which years are compared (the last three at first); **All** and **None** select or clear every year, in every tab. Below, a table with each year's distance, number of runs, distance per run and the change from the previous year; the year in progress is compared with the same months of the previous one.
+- **Personal records:** fastest time and pace for **5K, 10K, 21K and 42K**, in the years selected with the same year chips as the Statistics tab (every year, that is all time, at first), with the date, a dot in the color of the record's year and a link to the run.
+- **Count:** how many runs you did per distance, in the years selected with the year chips (every year at first): **<5K** under 4.5 km, **5K** from 4.5 to 9.5 km, **10K** from 9.5 to 20.5 km, **21K** from 20.5 to 41.5 km and **42K** from 41.5 to 48 km (each range includes its start and excludes its end). A **Total** tile adds up every range. Runs of 48 km or more are not counted.
 
 Distances follow the Home Assistant unit system (km or mi) and the texts follow its language (English or Portuguese).
 
 | Option | Default | |
 |---|---|---|
 | `title` | none | Card title |
-| `default_tab` | `statistics` | `statistics`, `records` or `list` |
+| `default_tab` | `statistics` | `statistics`, `records` or `count` |
 | `entry_id` | first account | Which Smashrun account, when more than one is configured |
 
 **How personal records are calculated.** The Smashrun API gives each run's total distance and time, but not its splits (reading the splits of every run would exceed the 250 requests per hour of a personal token). So the record for a distance is estimated from the **average pace of runs at least that long**: a half marathon run in 1:45:00 counts as 1:45:00 for 21K, and a 12 km run at 5:00/km counts as 50:00 for 10K. Runs up to 1% short also count (GPS tracks often come out a little short). For races of the exact distance it is the real time; your true best 5K inside a longer run may be faster than shown.
@@ -169,4 +169,4 @@ The card has a browser test (Chrome or Edge, headless):
   "file://$PWD/tests/card_test.html" | grep -o 'RESULT: [A-Z]*[^<]*'
 ```
 
-Open `tests/card_test.html?demo=statistics` (or `records`, `list`; add `&lang=pt-BR`, `&theme=dark`, `&units=mi`, `&w=340`) to see the card with sample data.
+Open `tests/card_test.html?demo=statistics` (or `records`, `count`; add `&lang=pt-BR`, `&theme=dark`, `&units=mi`, `&w=340`) to see the card with sample data.

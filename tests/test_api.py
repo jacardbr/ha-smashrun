@@ -393,6 +393,25 @@ class RunsUtilTests(unittest.TestCase):
         self.assertEqual(years["2025"]["months_km"][11], 21.1)
         self.assertEqual(years["2026"]["months_km"][9], 17.0)
         self.assertEqual(sum(years["2026"]["months_km"]), 17.0)
+        # 2 km, 5 km and 10 km in 2026; 21.1 km in 2025.
+        self.assertEqual(years["2026"]["counts"], {"lt5k": 1, "5k": 1, "10k": 1, "21k": 0, "42k": 0})
+        self.assertEqual(years["2025"]["counts"], {"lt5k": 0, "5k": 0, "10k": 0, "21k": 1, "42k": 0})
+
+    def test_distance_bucket(self):
+        bucket = runs_util.distance_bucket
+        self.assertIsNone(bucket(None))
+        self.assertIsNone(bucket(0))
+        self.assertEqual(bucket(0.8), "lt5k")
+        self.assertEqual(bucket(4.499), "lt5k")
+        self.assertEqual(bucket(4.5), "5k")
+        self.assertEqual(bucket(9.499), "5k")
+        self.assertEqual(bucket(9.5), "10k")
+        self.assertEqual(bucket(20.499), "10k")
+        self.assertEqual(bucket(20.5), "21k")
+        self.assertEqual(bucket(41.499), "21k")
+        self.assertEqual(bucket(41.5), "42k")
+        self.assertEqual(bucket(47.999), "42k")
+        self.assertIsNone(bucket(48.0))  # ultras are not counted
 
     def test_yearly_summary_uses_local_year(self):
         # 2026-01-01 01:00 UTC is still New Year's Eve 2025 at UTC-3.

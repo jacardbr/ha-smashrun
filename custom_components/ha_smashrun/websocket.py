@@ -10,10 +10,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .runs_util import RECORD_DISTANCES, personal_records, yearly_summary
-
-RECENT_RUNS = 10
-
+from .runs_util import COUNT_BUCKETS, RECORD_DISTANCES, personal_records, yearly_summary
 
 @callback
 def async_register(hass: HomeAssistant) -> None:
@@ -29,7 +26,7 @@ def async_register(hass: HomeAssistant) -> None:
 )
 @callback
 def ws_summary(hass: HomeAssistant, connection, msg) -> None:
-    """Distance per month and year, personal records and the latest runs."""
+    """Distance and run counts per year, and personal records."""
     entries = [
         e
         for e in hass.config_entries.async_entries(DOMAIN)
@@ -62,15 +59,6 @@ def ws_summary(hass: HomeAssistant, connection, msg) -> None:
             "years": yearly_summary(runs, tz),
             "record_distances": RECORD_DISTANCES,
             "records": records,
-            "recent": [
-                {
-                    "run_id": run.run_id,
-                    "start": run.start.isoformat(),
-                    "distance_km": run.distance_km,
-                    "duration_s": run.duration_s,
-                    "url": url(run.run_id),
-                }
-                for run in reversed(runs[-RECENT_RUNS:])
-            ],
+            "count_buckets": COUNT_BUCKETS,
         },
     )

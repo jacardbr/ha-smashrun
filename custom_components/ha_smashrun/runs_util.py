@@ -141,16 +141,45 @@ RECORD_DISTANCES = {"5k": 5.0, "10k": 10.0, "21k": 21.0975, "42k": 42.195}
 RECORD_TOLERANCE = 0.99
 
 
+# Run count buckets: key -> (from km, to km), from included, to excluded.
+# Runs outside every bucket (48 km or more, or without a distance) are not
+# counted.
+COUNT_BUCKETS = {
+    "lt5k": (0.0, 4.5),
+    "5k": (4.5, 9.5),
+    "10k": (9.5, 20.5),
+    "21k": (20.5, 41.5),
+    "42k": (41.5, 48.0),
+}
+
+
+def distance_bucket(distance_km: Optional[float]) -> Optional[str]:
+    """Count bucket of a run: 3 km -> "lt5k", 7 km -> "5k", 50 km -> None."""
+    if not distance_km:
+        return None
+    for key, (low, high) in COUNT_BUCKETS.items():
+        if low <= distance_km < high:
+            return key
+    return None
+
+
 def yearly_summary(runs: Iterable[Any], tz: tzinfo) -> dict[str, dict[str, Any]]:
-    """Per local year: kilometres per month (12 values) and the run count."""
+    """Per local year: kilometres per month (12 values), the run count and
+    the run count per distance bucket (see `distance_bucket`)."""
     years: dict[str, dict[str, Any]] = {}
     for run in runs:
         if run.start is None:
             continue
         local = run.start.astimezone(tz)
-        year = years.setdefault(str(local.year), {"months_km": [0.0] * 12, "runs": 0})
+        year = years.setdefault(
+            str(local.year),
+            {"months_km": [0.0] * 12, "runs": 0, "counts": {k: 0 for k in COUNT_BUCKETS}},
+        )
         year["months_km"][local.month - 1] += run.distance_km or 0.0
         year["runs"] += 1
+        bucket = distance_bucket(run.distance_km)
+        if bucket is not None:
+            year["counts"][bucket] += 1
     for year in years.values():
         year["months_km"] = [round(km, 3) for km in year["months_km"]]
     return dict(sorted(years.items()))

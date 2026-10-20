@@ -6,7 +6,7 @@
       --virtual-time-budget=5000 file:///.../tests/card_test.html | grep RESULT
 
   The page prints "RESULT: PASS (n checks)" or "RESULT: FAIL ..." in #out.
-  Add ?demo=statistics|records|list (and &lang=pt, &theme=dark, &units=mi, &w=340)
+  Add ?demo=statistics|records|count (and &lang=pt, &theme=dark, &units=mi, &w=340)
   to show one card for a screenshot instead of running the checks.
 -->
 <html><head><meta charset="utf-8">
@@ -46,7 +46,11 @@ function months(year, base) {
 const years = {};
 [thisYear - 3, thisYear - 2, thisYear - 1, thisYear].forEach((y, i) => {
   const m = months(y, 60 + 25 * i);
-  years[String(y)] = { months_km: m, runs: Math.round(m.reduce((a, b) => a + b, 0) / 8) };
+  years[String(y)] = {
+    months_km: m,
+    runs: Math.round(m.reduce((a, b) => a + b, 0) / 8),
+    counts: { lt5k: 3 + i, "5k": 20 + 5 * i, "10k": 8 + 2 * i, "21k": i, "42k": i >= 2 ? 1 : 0 },
+  };
 });
 const rec = (id, date, time, pace, dist) => ({
   run_id: id, start: date, time_s: time, pace_s_per_km: pace, run_distance_km: dist,
@@ -56,10 +60,17 @@ const SUMMARY = {
   username: "runner",
   years,
   record_distances: { "5k": 5, "10k": 10, "21k": 21.0975, "42k": 42.195 },
+  count_buckets: { lt5k: [0, 4.5], "5k": [4.5, 9.5], "10k": [9.5, 20.5], "21k": [20.5, 41.5], "42k": [41.5, 48] },
   records: {
     all: {
       "5k": rec("501", `${thisYear - 1}-05-10T07:00:00-03:00`, 1290, 258, 5.02),
       "10k": rec("502", `${thisYear}-03-02T07:00:00-03:00`, 2735, 273.5, 12.4),
+      "21k": rec("503", `${thisYear - 1}-08-20T07:00:00-03:00`, 6110, 289.6, 21.12),
+      "42k": null,
+    },
+    [String(thisYear - 1)]: {
+      "5k": rec("501", `${thisYear - 1}-05-10T07:00:00-03:00`, 1290, 258, 5.02),
+      "10k": rec("401", `${thisYear - 1}-06-15T07:00:00-03:00`, 2800, 280, 10.0),
       "21k": rec("503", `${thisYear - 1}-08-20T07:00:00-03:00`, 6110, 289.6, 21.12),
       "42k": null,
     },
@@ -69,13 +80,6 @@ const SUMMARY = {
       "21k": null, "42k": null,
     },
   },
-  recent: Array.from({ length: 10 }, (_, i) => ({
-    run_id: String(900 - i),
-    start: new Date(Date.UTC(thisYear, 0, 28 - 2 * i, 10)).toISOString(),
-    distance_km: 5 + (i % 4) * 2.5,
-    duration_s: (5 + (i % 4) * 2.5) * (330 - i * 3),
-    url: `https://smashrun.com/runner/run/${900 - i}`,
-  })),
 };
 
 function makeHass({ lang = "en", units = "km", runs = "42", fail = false } = {}) {
@@ -127,9 +131,9 @@ async function run() {
   let card = mount({}, hass);
   await tick(); await tick();
   eq(hass.calls, [{ type: "ha_smashrun/summary" }], "one WebSocket call");
-  eq($$(card, ".tab").map((b) => b.textContent), ["Statistics", "Personal records", "List"], "tab labels");
+  eq($$(card, ".tab").map((b) => b.textContent), ["Statistics", "Personal records", "Count"], "tab labels");
   ok($(card, ".tab.active").dataset.tab === "statistics", "statistics is the default tab");
-  eq($$(card, ".chip.on").map((c) => c.dataset.year), [thisYear, thisYear - 1, thisYear - 2].map(String), "last 3 years selected");
+  eq($$(card, ".chip:not(.bulk).on").map((c) => c.dataset.year), [thisYear, thisYear - 1, thisYear - 2].map(String), "last 3 years selected");
   eq($$(card, ".chart path").length, 3, "one line per selected year");
   eq($$(card, ".table tbody tr").length, 4, "year table lists every year");
 
@@ -141,6 +145,18 @@ async function run() {
   eq($$(card, ".chart path").length, 4, "monthly keeps the lines");
   $(card, `.chip[data-year="${thisYear}"]`).click();
   eq($$(card, ".chart path").length, 3, "deselecting removes a line");
+  // All / None buttons.
+  eq($$(card, ".chip.bulk").map((b) => b.textContent), ["All", "None"], "bulk buttons");
+  ok($(card, ".chips").firstElementChild.dataset.bulk === "all", "All comes first");
+  ok($(card, ".chips").lastElementChild.dataset.bulk === "none", "None comes last");
+  ok(!$(card, '[data-bulk="all"]').classList.contains("on"), "All is off with some years");
+  $(card, '[data-bulk="none"]').click();
+  eq($$(card, ".chart path").length, 0, "None clears the chart");
+  ok($(card, '[data-bulk="none"]').classList.contains("on"), "None is on with no year");
+  $(card, '[data-bulk="all"]').click();
+  eq($$(card, ".chart path").length, 4, "All selects every year");
+  ok($(card, '[data-bulk="all"]').classList.contains("on"), "All is on with every year");
+  $(card, `.chip[data-year="${thisYear}"]`).click();
 
   // Same hass state: no reload. A new run changes the sensor: reload.
   card.hass = hass;
@@ -151,7 +167,8 @@ async function run() {
   await tick(); await tick();
   eq(hass2.calls.length, 1, "reload after a new run");
 
-  // Records tab: all time by default, year filter switches the scope.
+  // Records tab: every year selected by default (all time); the year chips
+  // narrow it to the fastest of the selected years.
   $(card, '[data-tab="records"]').click();
   eq($$(card, ".tile .label").map((l) => l.textContent), ["5K", "10K", "21K", "42K"], "record distances");
   eq($$(card, ".tile .value").map((v) => v.textContent), ["21:30", "45:35", "1:41:50", "—"], "all-time times");
@@ -159,30 +176,51 @@ async function run() {
   ok($$(card, ".tile .meta")[1].textContent.includes("12.4 km"), "longer run is mentioned");
   ok(!$$(card, ".tile .meta")[0].textContent.includes("run"), "a ~5 km run is not called longer");
   ok($(card, ".tile a").href.endsWith("/run/501"), "record links to the run");
-  const select = $(card, "select.record-year");
-  eq([...select.options].map((o) => o.value), ["all", ...[0, 1, 2, 3].map((i) => String(thisYear - i))], "year options");
-  select.value = String(thisYear);
-  select.dispatchEvent(new Event("change"));
+  eq($$(card, ".chip:not(.bulk)").map((c) => c.dataset.recordYear), [0, 1, 2, 3].map((i) => String(thisYear - i)), "year chips, newest first");
+  eq($$(card, ".chip:not(.bulk).on").length, 4, "every year selected");
+  ok($(card, ".tile .meta .dot").style.getPropertyValue("--c") === $(card, `.chip[data-record-year="${thisYear - 1}"]`).style.getPropertyValue("--c"), "record dot has its year's color");
+  [1, 2, 3].forEach((i) => $(card, `.chip[data-record-year="${thisYear - i}"]`).click());
+  eq($$(card, ".chip:not(.bulk).on").map((c) => c.dataset.recordYear), [String(thisYear)], "only this year selected");
   eq($$(card, ".tile .value").map((v) => v.textContent), ["22:00", "45:35", "—", "—"], "times for this year");
-  const sel2 = $(card, "select.record-year");
-  sel2.value = String(thisYear - 3); // a year without records
-  sel2.dispatchEvent(new Event("change"));
-  ok($(card, "select.record-year").value === "all", "unknown year falls back to all time");
+  $(card, `.chip[data-record-year="${thisYear - 1}"]`).click();
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["21:30", "45:35", "1:41:50", "—"], "fastest of two years");
+  $(card, `.chip[data-record-year="${thisYear}"]`).click();
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["21:30", "46:40", "1:41:50", "—"], "times for last year");
+  $(card, `.chip[data-record-year="${thisYear - 1}"]`).click();
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["—", "—", "—", "—"], "no year selected");
+  $(card, '[data-tab="statistics"]').click();
+  eq($$(card, ".chip:not(.bulk).on").map((c) => c.dataset.year), [thisYear - 1, thisYear - 2, thisYear - 3].map(String), "chart selection is separate");
+  $(card, '[data-tab="records"]').click();
   ok($(card, ".note").textContent.includes("average pace"), "estimate note");
 
-  // List tab: 10 runs, newest first, with links.
-  $(card, '[data-tab="list"]').click();
-  eq($$(card, ".list tbody tr").length, 10, "ten runs");
-  ok($$(card, ".list tbody tr")[0].textContent.includes("5.00 km"), "distance with 2 decimals");
-  eq($$(card, ".list a").length, 10, "each run links to Smashrun");
+  // Count tab: every year selected by default, chips narrow it.
+  $(card, '[data-tab="count"]').click();
+  eq($$(card, ".tile .label").map((l) => l.textContent), ["<5K", "5K", "10K", "21K", "42K", "Total"], "count distances");
+  eq($$(card, ".chip:not(.bulk).on").length, 4, "count: every year selected");
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["18", "110", "44", "6", "2", "180"], "counts of every year");
+  ok($$(card, ".tile .meta")[0].textContent.includes("< 4.5 km"), "under 5K range");
+  ok($$(card, ".tile .meta")[1].textContent.includes("4.5 – 9.5 km"), "range shown");
+  ok($$(card, ".tile .meta")[4].textContent.includes("41.5 – 48.0 km"), "last range");
+  [1, 2, 3].forEach((i) => $(card, `.chip[data-count-year="${thisYear - i}"]`).click());
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["6", "35", "14", "3", "1", "59"], "counts of this year");
+  $(card, '[data-bulk="all"]').click();
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["18", "110", "44", "6", "2", "180"], "All in the count tab");
+  $(card, '[data-bulk="none"]').click();
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["0", "0", "0", "0", "0", "0"], "None in the count tab");
+  $(card, '[data-tab="records"]').click();
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["—", "—", "—", "—"], "records selection is separate");
+  ok(!$(card, ".list"), "no list tab anymore");
 
   // Miles and Portuguese.
   hass = makeHass({ lang: "pt-BR", units: "mi" });
   card = mount({ default_tab: "records" }, hass);
   await tick(); await tick();
-  eq($$(card, ".tab").map((b) => b.textContent), ["Estatísticas", "Recordes pessoais", "Lista"], "Portuguese tabs");
+  eq($$(card, ".tab").map((b) => b.textContent), ["Estatísticas", "Recordes pessoais", "Contagem"], "Portuguese tabs");
   ok($$(card, ".tile .pace")[0].textContent === "6:55 /mi", "pace per mile");
   ok($$(card, ".tile .meta")[1].textContent.includes("7,7 mi"), "longer run in miles, pt decimals");
+  eq($$(card, ".chip.bulk").map((b) => b.textContent), ["Todos", "Nenhum"], "Portuguese bulk buttons");
+  $(card, '[data-tab="count"]').click();
+  ok($$(card, ".tile .meta")[1].textContent.includes("2,8 – 5,9 mi"), "count range in miles");
 
   // Errors are shown, not thrown.
   hass = makeHass({ fail: true });
