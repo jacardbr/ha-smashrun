@@ -73,8 +73,11 @@ async def _async_register_card(hass: HomeAssistant) -> None:
         await hass.http.async_register_static_paths(
             [StaticPathConfig(CARD_URL, str(path), cache_headers=False)]
         )
-        # The version in the query string busts the browser cache on updates.
-        add_extra_js_url(hass, f"{CARD_URL}?v={integration.version}")
+        # The version and the file's modification time in the query string
+        # bust the browser cache on updates, also when the file changes
+        # without a new version (manual copies during development).
+        mtime = await hass.async_add_executor_job(lambda: int(path.stat().st_mtime))
+        add_extra_js_url(hass, f"{CARD_URL}?v={integration.version}-{mtime}")
     except Exception:  # noqa: BLE001 - the card must never break the integration
         _LOGGER.warning("Could not register the Smashrun Lovelace card", exc_info=True)
 

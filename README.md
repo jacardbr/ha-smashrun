@@ -102,14 +102,14 @@ type: custom:ha-smashrun-card
 
 It has three tabs:
 
-- **Statistics:** distance through the year with one line per year, **cumulative** (the classic year-over-year comparison) or **monthly**. Tap the year chips to choose which years are compared (the last three at first); **All** and **None** select or clear every year, in every tab. Below, a table with each year's distance, number of runs, distance per run and the change from the previous year; the year in progress is compared with the same months of the previous one.
-- **Personal records:** fastest time and pace for **5K, 10K, 21K and 42K**, in the years selected with the same year chips as the Statistics tab (every year, that is all time, at first), with the date, a dot in the color of the record's year and a link to the run.
-- **Count:** how many runs you did per distance, in the years selected with the year chips (every year at first): **<5K** under 4.5 km, **5K** from 4.5 to 9.5 km, **10K** from 9.5 to 20.5 km, **21K** from 20.5 to 41.5 km and **42K** from 41.5 to 48 km (each range includes its start and excludes its end). A **Total** tile adds up every range. Runs of 48 km or more are not counted.
+- **Statistics:** distance through the year with one line per year, **cumulative** (the classic year-over-year comparison) or **monthly**, or **Volume**: three bar charts with the distance per **week** (ISO weeks, Monday to Sunday), per **month** and per **year**, one bar per selected year in its color, with its value above it. Charts wider than the card (the weeks, and the months with several years) scroll sideways with the axis fixed, and open at the current week and month. Hover over the line chart, or click (tap) a column of a bar chart, to see each year's distance in that month, week or year, newest year first; in the bar charts a second click, or a click elsewhere, closes it. Each year has a green arrow up or a red arrow down and the difference in km against the next older year shown; the oldest year shown is the baseline. Tap the year chips to choose which years are compared (the last two at first); **All** and **None** select or clear every year, in every tab. Below the charts, the **Detail** button shows or hides (hidden at first) a table of the selected years with each one's distance, number of runs, distance per run and a **Comparison** with the next older year shown, as a green ▲ or red ▼ difference in km (the oldest year shown is the baseline); the year in progress is compared with the same months of the year below it (hover over the value to see which months).
+- **Personal records:** fastest time and pace for **5K, 10K, 21K and 42K**, in the years selected with the same year chips as the Statistics tab (every year, that is all time, at first), with a tag of the record's year in that year's color, which links to the run (the date shows on hover).
+- **Count:** how many runs you did per distance, in the years selected with the year chips (only the latest year at first): **<5K** under 4.5 km, **5K** from 4.5 to 9.5 km, **10K** from 9.5 to 20.5 km, **21K** from 20.5 to 41.5 km and **42K** from 41.5 to 48 km (each range includes its start and excludes its end). Only ranges with runs in the selected years are shown, plus a **Total** tile that adds them up. Runs of 48 km or more are not counted. The ranges can be changed in the card options.
 
-| Statistics | Personal records | Count |
-|---|---|---|
-| ![Statistics tab, light theme](docs/images/statistics-light.png) | ![Personal records tab, light theme](docs/images/records-light.png) | ![Count tab, light theme](docs/images/count-light.png) |
-| ![Statistics tab, dark theme](docs/images/statistics-dark.png) | ![Personal records tab, dark theme](docs/images/records-dark.png) | ![Count tab, dark theme](docs/images/count-dark.png) |
+| Statistics | Statistics: Volume | Personal records | Count |
+|---|---|---|---|
+| ![Statistics tab, light theme](docs/images/statistics-light.png) | ![Statistics tab, Volume, light theme](docs/images/volume-light.png) | ![Personal records tab, light theme](docs/images/records-light.png) | ![Count tab, light theme](docs/images/count-light.png) |
+| ![Statistics tab, dark theme](docs/images/statistics-dark.png) | ![Statistics tab, Volume, dark theme](docs/images/volume-dark.png) | ![Personal records tab, dark theme](docs/images/records-dark.png) | ![Count tab, dark theme](docs/images/count-dark.png) |
 
 _Screenshots with sample data, from `tests/card_test.html`._
 
@@ -120,6 +120,16 @@ Distances follow the Home Assistant unit system (km or mi) and the texts follow 
 | `title` | none | Card title |
 | `default_tab` | `statistics` | `statistics`, `records` or `count` |
 | `entry_id` | first account | Which Smashrun account, when more than one is configured |
+| `statistics_years` | `2` | Years selected at first in the Statistics tab (the latest ones; `0` = every year) |
+| `records_years` | `0` | Years selected at first in the Personal records tab |
+| `count_years` | `1` | Years selected at first in the Count tab |
+| `range_5k` | `4.5` | Count ranges, in km: where the 5K starts (the <5K range goes from 0 to here) |
+| `range_10k` | `9.5` | Where the 10K starts |
+| `range_21k` | `20.5` | Where the 21K starts |
+| `range_42k` | `41.5` | Where the 42K starts |
+| `range_max` | `48` | Where the 42K ends; longer runs are not counted |
+
+All of them can be set in the card editor, under **Years selected at first** and **Count ranges (km)**.
 
 **How personal records are calculated.** The Smashrun API gives each run's total distance and time, but not its splits (reading the splits of every run would exceed the 250 requests per hour of a personal token). So the record for a distance is estimated from the **average pace of runs at least that long**: a half marathon run in 1:45:00 counts as 1:45:00 for 21K, and a 12 km run at 5:00/km counts as 50:00 for 10K. Runs up to 1% short also count (GPS tracks often come out a little short). For races of the exact distance it is the real time; your true best 5K inside a longer run may be faster than shown.
 
@@ -172,8 +182,10 @@ python3 -m unittest discover -s tests -v
 The card has a browser test (Chrome or Edge, headless):
 
 ```sh
-"<browser>" --headless --disable-gpu --dump-dom --virtual-time-budget=5000 \
+"<browser>" --headless --disable-gpu --dump-dom --virtual-time-budget=8000 \
   "file://$PWD/tests/card_test.html" | grep -o 'RESULT: [A-Z]*[^<]*'
 ```
+
+A headless run skips the auto-scroll check, which needs a browser that draws frames; opening the page in a browser runs it too.
 
 Open `tests/card_test.html?demo=statistics` (or `records`, `count`; add `&lang=pt-BR`, `&theme=dark`, `&units=mi`, `&w=340`) to see the card with sample data.

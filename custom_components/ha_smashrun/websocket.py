@@ -10,7 +10,14 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .runs_util import COUNT_BUCKETS, RECORD_DISTANCES, personal_records, yearly_summary
+from .runs_util import (
+    COUNT_BUCKETS,
+    RECORD_DISTANCES,
+    count_buckets,
+    personal_records,
+    weekly_summary,
+    yearly_summary,
+)
 
 @callback
 def async_register(hass: HomeAssistant) -> None:
@@ -22,11 +29,14 @@ def async_register(hass: HomeAssistant) -> None:
     {
         vol.Required("type"): f"{DOMAIN}/summary",
         vol.Optional("entry_id"): str,
+        # Where the 5K, 10K, 21K and 42K count ranges start, then the end of
+        # the 42K, in km (card options). Default: COUNT_BUCKETS.
+        vol.Optional("count_limits"): [vol.Coerce(float)],
     }
 )
 @callback
 def ws_summary(hass: HomeAssistant, connection, msg) -> None:
-    """Distance and run counts per year, and personal records."""
+    """Distance per week, month and year, run counts and personal records."""
     entries = [
         e
         for e in hass.config_entries.async_entries(DOMAIN)
@@ -37,6 +47,14 @@ def ws_summary(hass: HomeAssistant, connection, msg) -> None:
     if not entries:
         connection.send_error(msg["id"], "not_found", "Smashrun is not set up")
         return
+
+    buckets = COUNT_BUCKETS
+    if msg.get("count_limits"):
+        try:
+            buckets = count_buckets(msg["count_limits"])
+        except ValueError as err:
+            connection.send_error(msg["id"], "invalid_format", str(err))
+            return
 
     coordinator = entries[0].runtime_data
     runs = coordinator.data.runs  # oldest first
@@ -56,9 +74,10 @@ def ws_summary(hass: HomeAssistant, connection, msg) -> None:
         msg["id"],
         {
             "username": username,
-            "years": yearly_summary(runs, tz),
+            "years": yearly_summary(runs, tz, buckets),
+            "weeks": weekly_summary(runs, tz),
             "record_distances": RECORD_DISTANCES,
             "records": records,
-            "count_buckets": COUNT_BUCKETS,
+            "count_buckets": buckets,
         },
     )

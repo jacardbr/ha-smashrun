@@ -6,7 +6,9 @@
       --virtual-time-budget=5000 file:///.../tests/card_test.html | grep RESULT
 
   The page prints "RESULT: PASS (n checks)" or "RESULT: FAIL ..." in #out.
-  Add ?demo=statistics|records|count (and &lang=pt, &theme=dark, &units=mi, &w=340)
+  Add ?demo=statistics|records|count (and &lang=pt, &theme=dark, &units=mi, &w=340,
+  &mode=monthly|volume and &detail=1 (open the table) for the statistics tab,
+  &hover=<month 0-11> to show the chart tooltip)
   to show one card for a screenshot instead of running the checks.
 -->
 <html><head><meta charset="utf-8">
@@ -30,6 +32,7 @@ customElements.define("ha-icon", class extends HTMLElement {
 <script src="../custom_components/ha_smashrun/frontend/ha-smashrun-card.js"></script>
 <script>
 const failures = [];
+const skipped = [];
 let checks = 0;
 const ok = (cond, msg) => { checks++; if (!cond) failures.push(msg); };
 const eq = (a, b, msg) => ok(JSON.stringify(a) === JSON.stringify(b), `${msg}: got ${JSON.stringify(a)} expected ${JSON.stringify(b)}`);
@@ -52,6 +55,11 @@ const years = {};
     counts: { lt5k: 3 + i, "5k": 20 + 5 * i, "10k": 8 + 2 * i, "21k": i, "42k": i >= 2 ? 1 : 0 },
   };
 });
+// ISO weeks: about a quarter of the month, more every year; 52 weeks.
+const weeks = {};
+[thisYear - 3, thisYear - 2, thisYear - 1, thisYear].forEach((y, i) => {
+  weeks[String(y)] = Array.from({ length: 53 }, (_, w) => (w < 52 ? Math.round((14 + 6 * i + 6 * Math.sin(w / 3 + y)) * 10) / 10 : 0));
+});
 const rec = (id, date, time, pace, dist) => ({
   run_id: id, start: date, time_s: time, pace_s_per_km: pace, run_distance_km: dist,
   url: `https://smashrun.com/runner/run/${id}`,
@@ -59,6 +67,7 @@ const rec = (id, date, time, pace, dist) => ({
 const SUMMARY = {
   username: "runner",
   years,
+  weeks,
   record_distances: { "5k": 5, "10k": 10, "21k": 21.0975, "42k": 42.195 },
   count_buckets: { lt5k: [0, 4.5], "5k": [4.5, 9.5], "10k": [9.5, 20.5], "21k": [20.5, 41.5], "42k": [41.5, 48] },
   records: {
@@ -115,6 +124,35 @@ function mount(config, hass) {
 const $ = (card, sel) => card.shadowRoot.querySelector(sel);
 const $$ = (card, sel) => [...card.shadowRoot.querySelectorAll(sel)];
 
+// Clicks column i of the named bar chart (week, month, year). "pointerleave"
+// clicks outside the charts instead.
+function hoverBar(card, name, i, type = "click") {
+  const wrap = $(card, `.chart-wrap[data-name="${name}"]`);
+  const svg = wrap.querySelector("svg.plot");
+  const W = Number(svg.getAttribute("viewBox").split(" ")[2]);
+  const n = Number(wrap.dataset.cols), ml = Number(wrap.dataset.ml), mr = Number(wrap.dataset.mr);
+  const x = ml + ((i + 0.5) / n) * (W - ml - mr);
+  // Scroll the column into view first, like a person would.
+  const scroller = wrap.querySelector(".scroller");
+  scroller.scrollLeft = Math.max(0, x - scroller.clientWidth / 2);
+  const rect = svg.getBoundingClientRect();
+  if (type === "pointerleave") {
+    $(card, ".chips").dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+    return;
+  }
+  wrap.dispatchEvent(new MouseEvent(type, { clientX: rect.left + (x / W) * rect.width, clientY: rect.top + 40, bubbles: true, composed: true }));
+}
+
+// Moves the pointer over the chart at the given month (0-11).
+function hoverMonth(card, month, type = "pointermove") {
+  const wrap = $(card, ".chart-wrap");
+  const rect = wrap.querySelector("svg").getBoundingClientRect();
+  const W = Number(wrap.querySelector("svg").getAttribute("viewBox").split(" ")[2]);
+  const M = { l: 46, r: 12 };
+  const x = M.l + ((month + 1) / 12) * (W - M.l - M.r); // cumulative: month end
+  wrap.dispatchEvent(new PointerEvent(type, { clientX: rect.left + (x / W) * rect.width, clientY: rect.top + 40, bubbles: true }));
+}
+
 async function demo() {
   document.getElementById("out").remove();
   if (params.get("theme") === "dark") document.body.classList.add("dark");
@@ -123,28 +161,120 @@ async function demo() {
     { title: "Smashrun", default_tab: params.get("demo") },
     makeHass({ lang: params.get("lang") || "en", units: params.get("units") || "km" })
   );
+  if (params.get("mode")) {
+    await tick(); await tick();
+    $(document.querySelector("ha-smashrun-card"), `[data-mode="${params.get("mode")}"]`).click();
+  }
+  if (params.get("detail")) {
+    await tick(); await tick();
+    $(document.querySelector("ha-smashrun-card"), "button.detail").click();
+  }
+  if (params.get("hover") !== null) {
+    // After the first resize redraw, which would clear the tooltip.
+    await new Promise((r) => setTimeout(r, 300));
+    hoverMonth(document.querySelector("ha-smashrun-card"), Number(params.get("hover")));
+  }
 }
 
 async function run() {
-  // Loads once, renders the statistics tab with the last 3 years selected.
+  // Loads once, renders the statistics tab with the last 2 years selected.
   let hass = makeHass();
   let card = mount({}, hass);
   await tick(); await tick();
   eq(hass.calls, [{ type: "ha_smashrun/summary" }], "one WebSocket call");
   eq($$(card, ".tab").map((b) => b.textContent), ["Statistics", "Personal records", "Count"], "tab labels");
   ok($(card, ".tab.active").dataset.tab === "statistics", "statistics is the default tab");
-  eq($$(card, ".chip:not(.bulk).on").map((c) => c.dataset.year), [thisYear, thisYear - 1, thisYear - 2].map(String), "last 3 years selected");
-  eq($$(card, ".chart path").length, 3, "one line per selected year");
-  eq($$(card, ".table tbody tr").length, 4, "year table lists every year");
+  eq($$(card, ".chip:not(.bulk).on").map((c) => c.dataset.year), [thisYear, thisYear - 1].map(String), "last 2 years selected");
+  eq($$(card, ".chart path").length, 2, "one line per selected year");
+
+  // Detail: the table is hidden at first and toggled by the button below the chart.
+  ok(!$(card, ".table"), "table hidden at first");
+  const detailBtn = () => $(card, "button.detail");
+  ok(detailBtn() && detailBtn().textContent.startsWith("Detail") && detailBtn().getAttribute("aria-expanded") === "false", "Detail button");
+  ok($(card, ".chart-wrap").nextElementSibling === detailBtn(), "Detail button right below the chart");
+  detailBtn().click();
+  ok($(card, ".table") && detailBtn().getAttribute("aria-expanded") === "true", "Detail shows the table");
+  detailBtn().click();
+  ok(!$(card, ".table"), "Detail hides the table again");
+  detailBtn().click();
+  $(card, '[data-mode="monthly"]').click();
+  ok($(card, ".table"), "table stays open in monthly mode");
+  $(card, '[data-mode="cumulative"]').click();
+
+  // Hover: tooltip with each selected year's cumulative distance at that month.
+  ok($(card, ".tip").hidden, "tooltip hidden at first");
+  hoverMonth(card, 2);
+  ok(!$(card, ".tip").hidden, "tooltip shown on hover");
+  const upToMar = (y) => years[String(y)].months_km.slice(0, 3).reduce((a, b) => a + b, 0);
+  const fmt0 = (v) => v.toLocaleString("en", { maximumFractionDigits: 0 });
+  eq($$(card, ".tip-row").map((r) => r.querySelector(".dot").nextSibling.textContent + r.querySelector(".tip-value").textContent),
+    [thisYear, thisYear - 1].map((y) => `${y}${fmt0(upToMar(y))} km`),
+    "cumulative km per year, newest first");
+  const arrows = $$(card, ".tip-row").map((r) => [r.firstChild.nextSibling.textContent, r.querySelector(".arrow").className]);
+  eq(arrows, [[String(thisYear), "arrow up"], [String(thisYear - 1), "arrow"]], "oldest year shown is the baseline: no arrow");
+  eq($$(card, ".tip-row")[1].querySelector(".diff").textContent, "", "baseline has no difference");
+  ok($(card, ".tip .diff .arrow.up"), "arrow sits inside the difference, next to the number");
+  ok($$(card, ".tip .arrow.up, .tip .arrow.down").every((a) => a.textContent === (a.classList.contains("up") ? "▲" : "▼")), "arrow glyphs");
+  const lastRow = $$(card, ".tip-row").find((r) => r.textContent.startsWith(String(thisYear)));
+  eq([lastRow.querySelector(".diff").textContent.slice(1), lastRow.querySelector(".diff").className],
+    [`${fmt0(upToMar(thisYear) - upToMar(thisYear - 1))} km`, "diff up"], "difference next to the arrow, same color, no sign");
+  ok($(card, ".tip-title").textContent === "March", "month name");
+  ok($(card, ".guide").getAttribute("visibility") === "visible", "guide line shown");
+  eq($$(card, "circle.hot").length, 2, "dots of that month highlighted");
+  // A weaker year gets a red arrow down.
+  const saved = card._data.years[String(thisYear)].months_km;
+  card._data.years[String(thisYear)].months_km = saved.map((km) => km / 2);
+  card._render();
+  hoverMonth(card, 2);
+  eq($$(card, ".tip-row").map((r) => r.textContent.slice(0, 4)), [thisYear, thisYear - 1].map(String), "newest first even when smaller");
+  const row = $$(card, ".tip-row").find((r) => r.textContent.startsWith(String(thisYear)));
+  ok(row.querySelector(".arrow").className === "arrow down" && row.querySelector(".arrow").textContent === "▼", "arrow down when lower");
+  const tableRow = $$(card, ".table tbody tr")[0];
+  ok(tableRow.querySelector(".down .arrow").textContent === "▼" && !tableRow.textContent.includes("-") && !tableRow.textContent.includes("−"), "red arrow down in the table, no sign");
+  eq([row.querySelector(".diff").textContent.slice(1), row.querySelector(".diff").className],
+    [`${fmt0(upToMar(thisYear - 1) - upToMar(thisYear) / 2)} km`, "diff down"], "negative difference in red, no sign");
+  card._data.years[String(thisYear)].months_km = saved;
+  card._render();
+  hoverMonth(card, 2, "pointerleave");
+  ok($(card, ".tip").hidden && $(card, ".guide").getAttribute("visibility") === "hidden", "hidden on leave");
+  eq($$(card, ".table tbody tr .year").map((td) => td.textContent), [thisYear, thisYear - 1].map(String), "year table follows the filter");
+  ok($$(card, ".table th").some((th) => th.textContent === "Comparison"), "Comparison column");
+  const cmp = (i) => $$(card, ".table tbody tr")[i].lastElementChild.textContent;
+  ok(cmp(0).startsWith("▲ ") && cmp(0).endsWith(" km") && !cmp(0).includes("%"), "comparison in km, not percent");
+  ok(cmp(1) === "", "two years shown: the older one is the baseline");
 
   // Toggling a year adds a line; monthly mode keeps the lines.
   $(card, `.chip[data-year="${thisYear - 3}"]`).click();
-  eq($$(card, ".chart path").length, 4, "selecting a year adds its line");
+  eq($$(card, ".chart path").length, 3, "selecting a year adds its line");
+  eq($$(card, ".table tbody tr").length, 3, "selecting a year adds its row");
+  ok(cmp(2) === "", "oldest year shown is the baseline");
+  // With a gap, each year is compared with the next one shown.
+  const fullKm = (y) => years[String(y)].months_km.reduce((a, b) => a + b, 0);
+  const kmDiff = (fullKm(thisYear - 1) - fullKm(thisYear - 3)).toLocaleString("en", { maximumFractionDigits: 0 });
+  eq(cmp(1), `▲ ${kmDiff} km`, "table compares with the next year shown, in km");
+  ok(!$(card, ".table tbody").textContent.includes("+"), "no sign in the table");
+  ok(!$(card, ".table tbody").textContent.includes("*"), "no asterisk in the table");
+  ok(!$$(card, ".note").some((n) => n.textContent.includes("Year in progress")), "no year-in-progress note");
+  ok($$(card, ".table tbody tr")[0].children[3].textContent === "8 km", "per run without decimals");
+  ok($$(card, ".table tbody tr")[1].querySelector(".up .arrow").textContent === "▲", "green arrow up in the table");
+  hoverMonth(card, 2);
+  const oldest = $$(card, ".tip-row").find((r) => r.textContent.startsWith(String(thisYear - 3)));
+  ok(oldest && oldest.querySelector(".arrow").className === "arrow", "oldest year shown is the baseline");
+  // With a gap in the selection, each year is compared with the next one shown.
+  const middle = $$(card, ".tip-row").find((r) => r.textContent.startsWith(String(thisYear - 1)));
+  eq(middle.querySelector(".diff").textContent.slice(1), `${fmt0(upToMar(thisYear - 1) - upToMar(thisYear - 3))} km`, "compared with the next year shown");
+  hoverMonth(card, 2, "pointerleave");
   $(card, '[data-mode="monthly"]').click();
   ok($(card, '[data-mode="monthly"]').classList.contains("on"), "monthly mode on");
-  eq($$(card, ".chart path").length, 4, "monthly keeps the lines");
+  const seg = $(card, ".segmented").getBoundingClientRect(), bodyBox = $(card, ".body").getBoundingClientRect();
+  ok(seg.width > bodyBox.width - 40, "mode buttons span the card width");
+  ok(Math.abs($$(card, ".seg")[0].offsetWidth - $$(card, ".seg")[1].offsetWidth) <= 1, "mode buttons share the width");
+  const segOn = getComputedStyle($(card, ".seg.on")), tabOn = getComputedStyle($(card, ".tab.active"));
+  ok(segOn.color === tabOn.color && segOn.borderBottomColor === tabOn.borderBottomColor && segOn.fontWeight === tabOn.fontWeight
+    && segOn.backgroundColor === tabOn.backgroundColor, "mode buttons look like the tabs");
+  eq($$(card, ".chart path").length, 3, "monthly keeps the lines");
   $(card, `.chip[data-year="${thisYear}"]`).click();
-  eq($$(card, ".chart path").length, 3, "deselecting removes a line");
+  eq($$(card, ".chart path").length, 2, "deselecting removes a line");
   // All / None buttons.
   eq($$(card, ".chip.bulk").map((b) => b.textContent), ["All", "None"], "bulk buttons");
   ok($(card, ".chips").firstElementChild.dataset.bulk === "all", "All comes first");
@@ -157,6 +287,78 @@ async function run() {
   eq($$(card, ".chart path").length, 4, "All selects every year");
   ok($(card, '[data-bulk="all"]').classList.contains("on"), "All is on with every year");
   $(card, `.chip[data-year="${thisYear}"]`).click();
+
+  // Volume: bar charts per week, month and year of the selected years.
+  $(card, '[data-bulk="none"]').click();
+  $(card, `.chip[data-year="${thisYear}"]`).click();
+  $(card, `.chip[data-year="${thisYear - 1}"]`).click();
+  $(card, '[data-mode="volume"]').click();
+  ok($(card, '[data-mode="volume"]').classList.contains("on"), "volume mode on");
+  eq($$(card, ".seg").map((b) => b.textContent), ["Cumulative", "Monthly", "Volume"], "three modes");
+  eq($$(card, ".chart-title").map((t) => t.textContent), ["Week", "Month", "Year"], "three bar charts");
+  const now = new Date();
+  const bars = (name) => $$(card, `.chart-wrap[data-name="${name}"] rect.bar`);
+  eq(bars("month").length, 12 + now.getMonth() + 1, "month bars: last year, and this year up to this month");
+  eq(bars("year").map((b) => b.getAttribute("fill")), [thisYear - 1, thisYear].map((y) => $(card, `.chip[data-year="${y}"]`).style.getPropertyValue("--c")), "year bars in the year colors, oldest first");
+  ok(bars("week").length > 52 && bars("week").length <= 52 + 53, "week bars: last year, and this year up to this week");
+  // Values above the bars; the week chart scrolls sideways, axis fixed.
+  const monthValues = $$(card, `.chart-wrap[data-name="month"] .bar-value`).map((t) => t.textContent);
+  ok(monthValues.includes(fmt0(years[String(thisYear - 1)].months_km[0])), "value above each bar");
+  eq($$(card, `.chart-wrap[data-name="year"] .bar-value`).map((t) => t.textContent),
+    [thisYear - 1, thisYear].map((y) => fmt0(years[String(y)].months_km.reduce((a, b) => a + b, 0))), "year values above the bars");
+  const weekScroller = $(card, `.chart-wrap[data-name="week"] .scroller`);
+  ok(weekScroller.scrollWidth > weekScroller.clientWidth + 100, "week chart scrolls sideways");
+  ok(weekScroller.scrollLeft > 0, "week chart starts scrolled towards the current week");
+  ok($(card, `.chart-wrap[data-name="week"] svg.yaxis`), "fixed axis next to the scrolling chart");
+  const weekBar = $(card, `.chart-wrap[data-name="week"] rect.bar`);
+  ok(weekBar.getBoundingClientRect().width >= 20, "week bars wide enough for their value");
+  // Tooltips: month (both years, newest first, with the difference).
+  hoverBar(card, "month", 1);
+  const monthTip = $(card, `.chart-wrap[data-name="month"] .tip`);
+  ok(!monthTip.hidden && monthTip.querySelector(".tip-title").textContent === "February", "month tooltip");
+  const wrapM = $(card, `.chart-wrap[data-name="month"]`);
+  wrapM.dispatchEvent(new PointerEvent("pointermove", { clientX: 0, clientY: 0, bubbles: true }));
+  wrapM.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true }));
+  ok(!monthTip.hidden && monthTip.querySelector(".tip-title").textContent === "February", "bars: moving the mouse does not change the tooltip");
+  hoverBar(card, "month", 1);
+  ok(monthTip.hidden, "a second click on the same column closes it");
+  hoverBar(card, "month", 1);
+  hoverBar(card, "week", 0);
+  ok(monthTip.hidden && !$(card, `.chart-wrap[data-name="week"] .tip`).hidden, "opening another chart's tooltip closes this one");
+  hoverBar(card, "week", 0);
+  hoverBar(card, "month", 1);
+  const feb = (y) => years[String(y)].months_km[1];
+  eq([...monthTip.querySelectorAll(".tip-row")].map((r) => r.querySelector(".tip-value").textContent), [thisYear, thisYear - 1].map((y) => `${fmt0(feb(y))} km`), "month values, newest first");
+  eq(monthTip.querySelector(".tip-row .diff").textContent.slice(1), `${fmt0(Math.abs(feb(thisYear) - feb(thisYear - 1)))} km`, "month difference");
+  eq(bars("month").filter((b) => b.classList.contains("hot")).length, 2, "hovered month bars highlighted");
+  hoverBar(card, "month", 1, "pointerleave");
+  ok(monthTip.hidden, "month tooltip hidden on leave");
+  // Week 1.
+  hoverBar(card, "week", 0);
+  const weekTip = $(card, `.chart-wrap[data-name="week"] .tip`);
+  ok(weekTip.querySelector(".tip-title").textContent === "Week 1", "week tooltip title");
+  eq([...weekTip.querySelectorAll(".tip-row .tip-value")].map((v) => v.textContent), [thisYear, thisYear - 1].map((y) => `${fmt0(weeks[String(y)][0])} km`), "week values");
+  hoverBar(card, "week", 0, "pointerleave");
+  // Year: each bar against the one before it; the first one is the baseline.
+  const yearKm = (y) => years[String(y)].months_km.reduce((a, b) => a + b, 0);
+  hoverBar(card, "year", 1);
+  const yearTip = $(card, `.chart-wrap[data-name="year"] .tip`);
+  eq([yearTip.querySelector(".tip-title").textContent, yearTip.querySelector(".tip-value").textContent],
+    [String(thisYear), `${fmt0(yearKm(thisYear))} km`], "year tooltip");
+  eq(yearTip.querySelector(".diff").textContent.slice(1), `${fmt0(Math.abs(yearKm(thisYear) - yearKm(thisYear - 1)))} km`, "year difference");
+  hoverBar(card, "year", 0);
+  eq(yearTip.querySelector(".diff").textContent, "", "first year is the baseline");
+  hoverBar(card, "year", 0, "pointerleave");
+  ok($(card, "button.detail") && $$(card, ".chart-wrap").pop().nextElementSibling === $(card, "button.detail"), "Detail below the volume charts");
+  ok($(card, ".table"), "table open in volume mode too (same Detail state)");
+  $(card, "button.detail").click();
+  ok(!$(card, ".table"), "Detail hides the table in volume mode");
+  $(card, "button.detail").click();
+  $(card, '[data-mode="cumulative"]').click();
+  ok($(card, ".table"), "table back in cumulative mode");
+  // Back to the selection of before (last three years but this one).
+  $(card, '[data-bulk="none"]').click();
+  [1, 2, 3].forEach((i) => $(card, `.chip[data-year="${thisYear - i}"]`).click());
 
   // Same hass state: no reload. A new run changes the sensor: reload.
   card.hass = hass;
@@ -178,7 +380,10 @@ async function run() {
   ok($(card, ".tile a").href.endsWith("/run/501"), "record links to the run");
   eq($$(card, ".chip:not(.bulk)").map((c) => c.dataset.recordYear), [0, 1, 2, 3].map((i) => String(thisYear - i)), "year chips, newest first");
   eq($$(card, ".chip:not(.bulk).on").length, 4, "every year selected");
-  ok($(card, ".tile .meta .dot").style.getPropertyValue("--c") === $(card, `.chip[data-record-year="${thisYear - 1}"]`).style.getPropertyValue("--c"), "record dot has its year's color");
+  eq($$(card, ".tile .yeartag").map((t) => t.textContent), [thisYear - 1, thisYear, thisYear - 1].map(String), "year tag instead of the date");
+  ok($(card, ".tile .yeartag").style.getPropertyValue("--c") === $(card, `.chip[data-record-year="${thisYear - 1}"]`).style.getPropertyValue("--c"), "year tag has its year's color");
+  ok($(card, ".tile .yeartag").title.includes(String(thisYear - 1)), "date on hover");
+  ok(!$$(card, ".tile .meta")[0].textContent.includes("May"), "date not shown");
   [1, 2, 3].forEach((i) => $(card, `.chip[data-record-year="${thisYear - i}"]`).click());
   eq($$(card, ".chip:not(.bulk).on").map((c) => c.dataset.recordYear), [String(thisYear)], "only this year selected");
   eq($$(card, ".tile .value").map((v) => v.textContent), ["22:00", "45:35", "—", "—"], "times for this year");
@@ -193,20 +398,24 @@ async function run() {
   $(card, '[data-tab="records"]').click();
   ok($(card, ".note").textContent.includes("average pace"), "estimate note");
 
-  // Count tab: every year selected by default, chips narrow it.
+  // Count tab: only the latest year selected by default.
   $(card, '[data-tab="count"]').click();
   eq($$(card, ".tile .label").map((l) => l.textContent), ["<5K", "5K", "10K", "21K", "42K", "Total"], "count distances");
-  eq($$(card, ".chip:not(.bulk).on").length, 4, "count: every year selected");
-  eq($$(card, ".tile .value").map((v) => v.textContent), ["18", "110", "44", "6", "2", "180"], "counts of every year");
+  eq($$(card, ".chip:not(.bulk).on").map((c) => c.dataset.countYear), [String(thisYear)], "count: latest year selected");
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["6", "35", "14", "3", "1", "59"], "counts of this year");
   ok($$(card, ".tile .meta")[0].textContent.includes("< 4.5 km"), "under 5K range");
   ok($$(card, ".tile .meta")[1].textContent.includes("4.5 – 9.5 km"), "range shown");
   ok($$(card, ".tile .meta")[4].textContent.includes("41.5 – 48.0 km"), "last range");
-  [1, 2, 3].forEach((i) => $(card, `.chip[data-count-year="${thisYear - i}"]`).click());
-  eq($$(card, ".tile .value").map((v) => v.textContent), ["6", "35", "14", "3", "1", "59"], "counts of this year");
+  $(card, `.chip[data-count-year="${thisYear - 1}"]`).click();
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["11", "65", "26", "5", "2", "109"], "counts of two years");
   $(card, '[data-bulk="all"]').click();
   eq($$(card, ".tile .value").map((v) => v.textContent), ["18", "110", "44", "6", "2", "180"], "All in the count tab");
   $(card, '[data-bulk="none"]').click();
-  eq($$(card, ".tile .value").map((v) => v.textContent), ["0", "0", "0", "0", "0", "0"], "None in the count tab");
+  eq($$(card, ".tile").length, 0, "None in the count tab: no tiles");
+  ok($(card, ".empty").textContent.includes("No runs in the selected years"), "empty message");
+  $(card, `.chip[data-count-year="${thisYear - 3}"]`).click();
+  eq($$(card, ".tile .label").map((l) => l.textContent), ["<5K", "5K", "10K", "Total"], "only ranges with runs");
+  eq($$(card, ".tile .value").map((v) => v.textContent), ["3", "20", "8", "31"], "counts without empty ranges");
   $(card, '[data-tab="records"]').click();
   eq($$(card, ".tile .value").map((v) => v.textContent), ["—", "—", "—", "—"], "records selection is separate");
   ok(!$(card, ".list"), "no list tab anymore");
@@ -228,6 +437,39 @@ async function run() {
   await tick(); await tick();
   ok($(card, ".empty").textContent.includes("Smashrun is not set up"), "error message");
 
+  // Volume charts drawn while the card is hidden still open at the current
+  // week and month once it is shown.
+  const stage = document.getElementById("stage");
+  stage.style.display = "none";
+  hass = makeHass();
+  card = mount({ default_tab: "statistics" }, hass);
+  await tick(); await tick();
+  $(card, '[data-mode="volume"]').click();
+  const scroller = (name) => $(card, `.chart-wrap[data-name="${name}"] .scroller`);
+  eq([scroller("week").scrollLeft, scroller("month").scrollLeft], [0, 0], "no scroll while hidden");
+  stage.style.display = "";
+  // Needs real frames (resize observers): a headless --dump-dom run has none,
+  // so these checks only run in a browser that draws (open the page).
+  const frames = () => Promise.race([
+    new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50)))),
+    new Promise((r) => setTimeout(r, 300)),
+  ]);
+  await frames(); await frames();
+  if (card._width) {
+  ok(scroller("week").scrollLeft > 0 && scroller("week").scrollLeft === Number(scroller("week").dataset.scroll), "week scrolled to the current week once shown");
+  ok(scroller("month").scrollLeft > 0, "month scrolled to the current month once shown");
+  const monthCol = $$(card, `.chart-wrap[data-name="month"] rect.bar`).filter((b) => Number(b.dataset.col) === new Date().getMonth()).pop();
+  const box = scroller("month").getBoundingClientRect(), barBox = monthCol.getBoundingClientRect();
+  ok(barBox.left >= box.left - 1 && barBox.right <= box.right + 1, "current month's bars visible");
+  // A person's own scroll is kept when the chart is resized.
+  scroller("week").dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+  scroller("week").scrollLeft = 0;
+  scroller("week").style.width = "300px";
+  await frames(); await frames();
+  ok(scroller("week").scrollLeft === 0, "scroll kept after the person scrolls");
+  scroller("week").style.width = "";
+  } else skipped.push("auto-scroll once shown (needs a browser that draws frames)");
+
   // Config validation and entry_id.
   let threw = false;
   try { document.createElement("ha-smashrun-card").setConfig({ default_tab: "nope" }); } catch (e) { threw = true; }
@@ -236,11 +478,47 @@ async function run() {
   card = mount({ entry_id: "abc" }, hass);
   await tick();
   eq(hass.calls[0], { type: "ha_smashrun/summary", entry_id: "abc" }, "entry_id is sent");
+
+  // Years selected at first, per tab.
+  hass = makeHass();
+  card = mount({ statistics_years: 3, records_years: 1, count_years: 0 }, hass);
+  await tick(); await tick();
+  eq($$(card, ".chip:not(.bulk).on").length, 3, "statistics_years");
+  $(card, '[data-tab="records"]').click();
+  eq($$(card, ".chip:not(.bulk).on").map((c) => c.dataset.recordYear), [String(thisYear)], "records_years");
+  $(card, '[data-tab="count"]').click();
+  eq($$(card, ".chip:not(.bulk).on").length, 4, "count_years 0 = every year");
+  // Changing the option in the editor applies right away.
+  card.setConfig({ statistics_years: 3, records_years: 1, count_years: 2 });
+  eq($$(card, ".chip:not(.bulk).on").length, 2, "new count_years applies");
+
+  // Count ranges: sent to Home Assistant only when changed, reload on change.
+  eq(hass.calls[0].count_limits, undefined, "default ranges are not sent");
+  hass = makeHass();
+  card = mount({ range_5k: 5, range_max: 50 }, hass);
+  await tick(); await tick();
+  eq(hass.calls[0].count_limits, [5, 9.5, 20.5, 41.5, 50], "custom ranges are sent");
+  card.setConfig({ range_5k: 5, range_max: 60 });
+  await tick(); await tick();
+  eq(hass.calls.length, 2, "changing a range reloads");
+  eq(hass.calls[1].count_limits, [5, 9.5, 20.5, 41.5, 60], "new ranges are sent");
+  card.setConfig({ range_5k: 5, range_max: 60, title: "x" });
+  await tick();
+  eq(hass.calls.length, 2, "other options do not reload");
+  threw = false;
+  try { document.createElement("ha-smashrun-card").setConfig({ range_10k: 3 }); } catch (e) { threw = true; }
+  ok(threw, "ranges that do not go up are rejected");
+  threw = false;
+  try { document.createElement("ha-smashrun-card").setConfig({ count_years: -1 }); } catch (e) { threw = true; }
+  ok(threw, "negative years are rejected");
+  const form = customElements.get("ha-smashrun-card").getConfigForm();
+  eq(form.schema.map((f) => f.name), ["title", "default_tab", "entry_id", "years", "count_ranges"], "editor sections");
+  eq(form.schema[4].schema.map((f) => f.default), [4.5, 9.5, 20.5, 41.5, 48], "editor range defaults");
   ok(window.customCards.some((c) => c.type === "ha-smashrun-card"), "registered in the card picker");
 
   document.getElementById("out").textContent = failures.length
     ? `RESULT: FAIL (${failures.length}/${checks})\n` + failures.join("\n")
-    : `RESULT: PASS (${checks} checks)`;
+    : `RESULT: PASS (${checks} checks)` + (skipped.length ? `\nSkipped: ${skipped.join("; ")}` : "");
   document.getElementById("stage").remove();
 }
 

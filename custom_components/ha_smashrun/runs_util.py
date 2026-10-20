@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from bisect import bisect_left
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any, Optional
 
@@ -153,17 +153,33 @@ COUNT_BUCKETS = {
 }
 
 
-def distance_bucket(distance_km: Optional[float]) -> Optional[str]:
+def count_buckets(limits: Sequence[float]) -> dict[str, tuple[float, float]]:
+    """Buckets from 5 ascending limits in km: where the 5K, 10K, 21K and 42K
+    start, then the end of the 42K. The "lt5k" bucket starts at 0.
+
+    `[4.5, 9.5, 20.5, 41.5, 48]` gives `COUNT_BUCKETS`.
+    """
+    if len(limits) != 5 or any(not a < b for a, b in zip([0.0, *limits], limits)):
+        raise ValueError("count limits must be 5 ascending distances above 0")
+    edges = [0.0, *(float(km) for km in limits)]
+    return {key: (edges[i], edges[i + 1]) for i, key in enumerate(COUNT_BUCKETS)}
+
+
+def distance_bucket(
+    distance_km: Optional[float], buckets: Optional[dict[str, tuple[float, float]]] = None
+) -> Optional[str]:
     """Count bucket of a run: 3 km -> "lt5k", 7 km -> "5k", 50 km -> None."""
     if not distance_km:
         return None
-    for key, (low, high) in COUNT_BUCKETS.items():
+    for key, (low, high) in (buckets or COUNT_BUCKETS).items():
         if low <= distance_km < high:
             return key
     return None
 
 
-def yearly_summary(runs: Iterable[Any], tz: tzinfo) -> dict[str, dict[str, Any]]:
+def yearly_summary(
+    runs: Iterable[Any], tz: tzinfo, buckets: Optional[dict[str, tuple[float, float]]] = None
+) -> dict[str, dict[str, Any]]:
     """Per local year: kilometres per month (12 values), the run count and
     the run count per distance bucket (see `distance_bucket`)."""
     years: dict[str, dict[str, Any]] = {}
@@ -177,12 +193,27 @@ def yearly_summary(runs: Iterable[Any], tz: tzinfo) -> dict[str, dict[str, Any]]
         )
         year["months_km"][local.month - 1] += run.distance_km or 0.0
         year["runs"] += 1
-        bucket = distance_bucket(run.distance_km)
+        bucket = distance_bucket(run.distance_km, buckets)
         if bucket is not None:
             year["counts"][bucket] += 1
     for year in years.values():
         year["months_km"] = [round(km, 3) for km in year["months_km"]]
     return dict(sorted(years.items()))
+
+
+def weekly_summary(runs: Iterable[Any], tz: tzinfo) -> dict[str, list[float]]:
+    """Kilometres per ISO week (Monday to Sunday), 53 values per ISO year.
+
+    A run on Monday 2025-12-29 is in week 1 of 2026; years with 52 weeks
+    keep 0 in week 53.
+    """
+    weeks: dict[str, list[float]] = {}
+    for run in runs:
+        if run.start is None:
+            continue
+        iso_year, week, _ = run.start.astimezone(tz).isocalendar()
+        weeks.setdefault(str(iso_year), [0.0] * 53)[week - 1] += run.distance_km or 0.0
+    return {year: [round(km, 3) for km in kms] for year, kms in sorted(weeks.items())}
 
 
 def personal_records(

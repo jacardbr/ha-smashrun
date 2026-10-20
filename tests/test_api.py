@@ -397,6 +397,24 @@ class RunsUtilTests(unittest.TestCase):
         self.assertEqual(years["2026"]["counts"], {"lt5k": 1, "5k": 1, "10k": 1, "21k": 0, "42k": 0})
         self.assertEqual(years["2025"]["counts"], {"lt5k": 0, "5k": 0, "10k": 0, "21k": 1, "42k": 0})
 
+    def test_count_buckets(self):
+        self.assertEqual(runs_util.count_buckets([4.5, 9.5, 20.5, 41.5, 48]), runs_util.COUNT_BUCKETS)
+        custom = runs_util.count_buckets([4, 8, 18, 40, 60])
+        self.assertEqual(custom["lt5k"], (0.0, 4.0))
+        self.assertEqual(custom["42k"], (40.0, 60.0))
+        self.assertEqual(runs_util.distance_bucket(8.5, custom), "10k")
+        self.assertEqual(runs_util.distance_bucket(50, custom), "42k")
+        for bad in ([4, 9, 20, 41], [5, 4, 20, 41, 48], [0, 9, 20, 41, 48], [4, 9, 20, 41, 41]):
+            with self.assertRaises(ValueError):
+                runs_util.count_buckets(bad)
+
+    def test_yearly_summary_custom_buckets(self):
+        buckets = runs_util.count_buckets([1, 6, 15, 20, 30])
+        years = runs_util.yearly_summary(self._runs(), TZ, buckets)
+        # 2 km and 5 km are 5Ks now, 10 km a 10K; 21.1 km is a 42K.
+        self.assertEqual(years["2026"]["counts"], {"lt5k": 0, "5k": 2, "10k": 1, "21k": 0, "42k": 0})
+        self.assertEqual(years["2025"]["counts"]["42k"], 1)
+
     def test_distance_bucket(self):
         bucket = runs_util.distance_bucket
         self.assertIsNone(bucket(None))
@@ -412,6 +430,16 @@ class RunsUtilTests(unittest.TestCase):
         self.assertEqual(bucket(41.5), "42k")
         self.assertEqual(bucket(47.999), "42k")
         self.assertIsNone(bucket(48.0))  # ultras are not counted
+
+    def test_weekly_summary(self):
+        weeks = runs_util.weekly_summary(self._runs(), TZ)
+        # 2026-10-12 is a Monday of ISO week 42; 2026-10-19 of week 43.
+        self.assertEqual(weeks["2026"][41], 7.0)
+        self.assertEqual(weeks["2026"][42], 10.0)
+        self.assertEqual(len(weeks["2026"]), 53)
+        # 2025-12-31 (Wednesday) is in ISO week 1 of 2026.
+        self.assertEqual(weeks["2026"][0], 21.1)
+        self.assertNotIn("2025", weeks)
 
     def test_yearly_summary_uses_local_year(self):
         # 2026-01-01 01:00 UTC is still New Year's Eve 2025 at UTC-3.
