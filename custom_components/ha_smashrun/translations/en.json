@@ -1,0 +1,120 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smashrun personal access token",
+        "description": "Open [this Smashrun page]({token_url}) while signed in to Smashrun, allow access and copy the access token it shows. You can paste the token alone or the whole address that contains `access_token=`. The token lasts about 60 days; when it expires, Home Assistant asks you for a new one.",
+        "data": {
+          "access_token": "Access token"
+        }
+      },
+      "reauth_confirm": {
+        "title": "New Smashrun token",
+        "description": "Smashrun no longer accepts the saved token (they expire about every 60 days). Get a new one on [this Smashrun page]({token_url}) and paste it here.",
+        "data": {
+          "access_token": "Access token"
+        }
+      },
+      "reconfigure": {
+        "title": "Replace the Smashrun token",
+        "description": "Paste a new token from [this Smashrun page]({token_url}), for example before the current one expires.",
+        "data": {
+          "access_token": "Access token"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Smashrun rejected the token. Check that you copied all of it and that it has not expired.",
+      "cannot_connect": "Could not connect to Smashrun.",
+      "unknown": "Unexpected error. Check the Home Assistant log."
+    },
+    "abort": {
+      "already_configured": "This Smashrun account is already configured.",
+      "reauth_successful": "Token updated.",
+      "wrong_account": "This token belongs to a different Smashrun account than the one configured.",
+      "reconfigure_successful": "Token updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Smashrun options",
+        "data": {
+          "scan_interval": "Update interval (minutes)"
+        },
+        "data_description": {
+          "scan_interval": "How often to check for a new run. The full history and the badges are only read again when a new run shows up (and once a day)."
+        }
+      }
+    }
+  },
+  "entity": {
+    "calendar": {
+      "runs": {
+        "name": "Runs"
+      }
+    },
+    "sensor": {
+      "last_run": {
+        "name": "Last run"
+      },
+      "last_run_distance": {
+        "name": "Last run distance"
+      },
+      "last_run_duration": {
+        "name": "Last run duration"
+      },
+      "last_run_pace": {
+        "name": "Last run pace"
+      },
+      "last_run_speed": {
+        "name": "Last run speed"
+      },
+      "last_run_heart_rate_average": {
+        "name": "Last run average heart rate"
+      },
+      "last_run_heart_rate_max": {
+        "name": "Last run max heart rate"
+      },
+      "last_run_cadence": {
+        "name": "Last run cadence"
+      },
+      "last_run_elevation_gain": {
+        "name": "Last run elevation gain"
+      },
+      "total_distance": {
+        "name": "Total distance"
+      },
+      "total_runs": {
+        "name": "Total runs"
+      },
+      "distance_this_week": {
+        "name": "Distance this week"
+      },
+      "distance_this_month": {
+        "name": "Distance this month"
+      },
+      "distance_this_year": {
+        "name": "Distance this year"
+      },
+      "runs_this_week": {
+        "name": "Runs this week"
+      },
+      "runs_this_month": {
+        "name": "Runs this month"
+      },
+      "runs_this_year": {
+        "name": "Runs this year"
+      },
+      "badges": {
+        "name": "Badges"
+      },
+      "latest_badge": {
+        "name": "Latest badge"
+      },
+      "token_expires": {
+        "name": "Token expires"
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "domain": "ha_smashrun",
+  "name": "Smashrun",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": [
+    "recorder"
+  ],
+  "documentation": "https://github.com/jacardbr/ha-smashrun",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/jacardbr/ha-smashrun/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

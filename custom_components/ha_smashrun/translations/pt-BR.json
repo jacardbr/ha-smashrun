@@ -1,0 +1,120 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Token de acesso pessoal do Smashrun",
+        "description": "Com o Smashrun logado, abra [esta página do Smashrun]({token_url}), autorize o acesso e copie o token de acesso exibido. Você pode colar só o token ou o endereço inteiro que contém `access_token=`. O token dura cerca de 60 dias; quando vencer, o Home Assistant pede um novo.",
+        "data": {
+          "access_token": "Token de acesso"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Novo token do Smashrun",
+        "description": "O Smashrun não aceita mais o token salvo (eles vencem a cada cerca de 60 dias). Gere um novo [nesta página do Smashrun]({token_url}) e cole aqui.",
+        "data": {
+          "access_token": "Token de acesso"
+        }
+      },
+      "reconfigure": {
+        "title": "Trocar o token do Smashrun",
+        "description": "Cole um token novo gerado [nesta página do Smashrun]({token_url}), por exemplo antes de o atual vencer.",
+        "data": {
+          "access_token": "Token de acesso"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "O Smashrun recusou o token. Confira se copiou o token inteiro e se ele não venceu.",
+      "cannot_connect": "Não foi possível conectar ao Smashrun.",
+      "unknown": "Erro inesperado. Veja o log do Home Assistant."
+    },
+    "abort": {
+      "already_configured": "Esta conta do Smashrun já está configurada.",
+      "reauth_successful": "Token atualizado.",
+      "wrong_account": "Este token é de uma conta do Smashrun diferente da configurada.",
+      "reconfigure_successful": "Token atualizado."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opções do Smashrun",
+        "data": {
+          "scan_interval": "Intervalo de atualização (minutos)"
+        },
+        "data_description": {
+          "scan_interval": "Com que frequência procurar uma corrida nova. O histórico completo e os badges só são lidos de novo quando aparece uma corrida nova (e uma vez por dia)."
+        }
+      }
+    }
+  },
+  "entity": {
+    "calendar": {
+      "runs": {
+        "name": "Corridas"
+      }
+    },
+    "sensor": {
+      "last_run": {
+        "name": "Última corrida"
+      },
+      "last_run_distance": {
+        "name": "Distância da última corrida"
+      },
+      "last_run_duration": {
+        "name": "Duração da última corrida"
+      },
+      "last_run_pace": {
+        "name": "Pace da última corrida"
+      },
+      "last_run_speed": {
+        "name": "Velocidade da última corrida"
+      },
+      "last_run_heart_rate_average": {
+        "name": "FC média da última corrida"
+      },
+      "last_run_heart_rate_max": {
+        "name": "FC máxima da última corrida"
+      },
+      "last_run_cadence": {
+        "name": "Cadência da última corrida"
+      },
+      "last_run_elevation_gain": {
+        "name": "Ganho de elevação da última corrida"
+      },
+      "total_distance": {
+        "name": "Distância total"
+      },
+      "total_runs": {
+        "name": "Total de corridas"
+      },
+      "distance_this_week": {
+        "name": "Distância na semana"
+      },
+      "distance_this_month": {
+        "name": "Distância no mês"
+      },
+      "distance_this_year": {
+        "name": "Distância no ano"
+      },
+      "runs_this_week": {
+        "name": "Corridas na semana"
+      },
+      "runs_this_month": {
+        "name": "Corridas no mês"
+      },
+      "runs_this_year": {
+        "name": "Corridas no ano"
+      },
+      "badges": {
+        "name": "Badges"
+      },
+      "latest_badge": {
+        "name": "Último badge"
+      },
+      "token_expires": {
+        "name": "Validade do token"
+      }
+    }
+  }
+}
