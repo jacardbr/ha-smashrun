@@ -8,14 +8,25 @@ It uses the official [Smashrun API](https://api.smashrun.com/) with a **personal
 
 Every 30 minutes (configurable) Home Assistant asks Smashrun for your latest run. Only when a new run shows up (and once a day, to pick up edits and deletions) does it read the full run list and your badges again. A run appears in Home Assistant after it has synced to Smashrun.
 
-## Getting a personal access token
+## Signing in
+
+The integration reads Smashrun with a **personal access token**, which lasts about 60 days. The setup offers two ways to get it:
+
+- **Email and password** (recommended): Home Assistant signs in with them to get the token, and gets a new one by itself **7 days before** it expires, so at most **53 days** after the last one (a token is taken to last 60 days, or less if Smashrun says so), and whenever Smashrun rejects it, so you never paste tokens. If the password stops working (for example after you change it on Smashrun), Home Assistant shows a **Reauthenticate** notice asking for it again.
+  - The email and password are saved in Home Assistant's configuration (`.storage/core.config_entries`), like other integrations that sign in with a password; diagnostics redact them.
+  - This uses the login service behind Smashrun's own authorization page (the one below), which is not part of Smashrun's documented API. If Smashrun changes it, switch to a pasted token in **Reconfigure**.
+- **Paste a token**: get it yourself as described below and paste it; when it expires, paste a new one.
+
+**Settings → Devices & services → Smashrun → ⋮ → Reconfigure** switches between the two, or updates the email/password or the token.
+
+### Getting a personal access token by hand
 
 1. Sign in to <https://smashrun.com>.
 2. Open this address: <https://secure.smashrun.com/oauth2/authenticate?client_id=client&scope=read_activity&response_type=token&redirect_uri=urn:ietf:wg:oauth:2.0:oob> (the setup form has the same link).
 3. Allow access. Smashrun shows the access token, or puts it in the address bar after `access_token=`.
 4. Copy it. You can paste the token alone or the whole address: the integration extracts the token.
 
-Personal tokens **expire after about 60 days** and cannot be renewed automatically (Smashrun only allows that for registered apps). When the token expires, Home Assistant shows a **Reauthenticate** notice for the integration: repeat the steps above and paste the new token. To swap the token earlier, use **Settings → Devices & services → Smashrun → ⋮ → Reconfigure**. The **Token expires** sensor tells you when the current one stops working, so you can set up a reminder. Personal tokens are also limited to 250 API requests per hour, far above what the integration uses.
+Personal tokens **expire after about 60 days** and cannot be refreshed through the API (Smashrun only allows that for registered apps): with a pasted token, when it expires Home Assistant shows a **Reauthenticate** notice for the integration; repeat the steps above and paste the new token. To swap the token earlier, use **Reconfigure**. The **Token expires** sensor tells you when the current one stops working, so you can set up a reminder. Personal tokens are also limited to 250 API requests per hour, far above what the integration uses.
 
 ## Installation (HACS)
 
@@ -24,7 +35,7 @@ Personal tokens **expire after about 60 days** and cannot be renewed automatical
 1. Click the button above, or add it by hand: **HACS → ⋮ → Custom repositories**, paste `https://github.com/jacardbr/ha-smashrun`, category **Integration**, then **Add**.
 2. Search for **Smashrun** in HACS and download it.
 3. **Restart Home Assistant.**
-4. Go to **Settings → Devices & services → Add integration → Smashrun** and paste your access token. Leave **Import the whole run history** checked to fill the sensors' graphs with your past runs (see [Importing history](#importing-history)).
+4. Go to **Settings → Devices & services → Add integration → Smashrun** and choose **Email and password** or **Paste a personal access token** (see [Signing in](#signing-in)). Leave **Import the whole run history** checked to fill the sensors' graphs with your past runs (see [Importing history](#importing-history)).
 
 Manual installation (without HACS): copy `custom_components/ha_smashrun` to `<your /config>/custom_components/ha_smashrun` and restart.
 
@@ -71,7 +82,7 @@ The badges endpoint is listed by Smashrun but its response format is not documen
 
 | Entity | Notes |
 |---|---|
-| Token expires | When the personal access token stops working (diagnostic). Checked once a day |
+| Token expires | When the personal access token stops working (diagnostic). With the email and password saved, it is 60 days after the token was obtained (or earlier if Smashrun says so), renewed 7 days before; with a pasted token, it is checked once a day |
 
 Example reminder a week before:
 

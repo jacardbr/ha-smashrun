@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+
+- **Sign in with email and password**: the setup now offers it beside pasting a token. Home Assistant gets the personal access token itself and a new one 7 days before it expires (or when Smashrun rejects it), so tokens no longer need pasting. A failed login opens a reauthentication asking for the password. **Reconfigure** switches between the two ways. Uses the login service behind Smashrun's authorization page (not part of the documented API). Diagnostics redact the email and password. A token from the login is taken to last at most 60 days (Smashrun's personal tokens), even when the login answers with a longer lifetime, so it is renewed at most 53 days after it was obtained; the **Token expires** sensor shows that date (the daily token check is ignored when it answers zero or less), and an early renewal happens at most once every 12 hours.
+
 ## 0.4.0
 
 - Card, **Personal Records** tab: two views, **Performance** (the fastest 5K, 10K, 21K and 42K, as before) and the new **Volume**: the most kilometres in one day, week, month and year of the selected years, each with its year tag. The integration now also sends the biggest day of each year.

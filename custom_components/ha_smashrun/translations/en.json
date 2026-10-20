@@ -2,6 +2,26 @@
   "config": {
     "step": {
       "user": {
+        "title": "Sign in to Smashrun",
+        "description": "Choose how Home Assistant gets your Smashrun personal access token.",
+        "menu_options": {
+          "credentials": "Email and password (the token renews itself)",
+          "token": "Paste a personal access token"
+        }
+      },
+      "credentials": {
+        "title": "Smashrun email and password",
+        "description": "Home Assistant signs in with them to get your personal access token, and gets a new one by itself before it expires (about every 60 days). They are saved in Home Assistant's configuration. This uses the login behind Smashrun's own authorization page, which is not part of the documented API: if it stops working, you can switch to a pasted token in Reconfigure.",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "import_history": "Import the whole run history"
+        },
+        "data_description": {
+          "import_history": "Fills the long-term statistics of the history sensors (total distance and runs, distance and runs this week/month/year) with every run since your first one, in the background, so their graphs do not start today. You can also run it later from Configure or with the ha_smashrun.import_history action."
+        }
+      },
+      "token": {
         "title": "Smashrun personal access token",
         "description": "Open [this Smashrun page]({token_url}) while signed in to Smashrun, allow access and copy the access token it shows. You can paste the token alone or the whole address that contains `access_token=`. The token lasts about 60 days; when it expires, Home Assistant asks you for a new one.",
         "data": {
@@ -12,6 +32,14 @@
           "import_history": "Fills the long-term statistics of the history sensors (total distance and runs, distance and runs this week/month/year) with every run since your first one, in the background, so their graphs do not start today. You can also run it later from Configure or with the ha_smashrun.import_history action."
         }
       },
+      "reauth_credentials": {
+        "title": "Smashrun password",
+        "description": "Home Assistant could not get a new Smashrun token with the saved email and password (did the password change?). Enter them again.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
       "reauth_confirm": {
         "title": "New Smashrun token",
         "description": "Smashrun no longer accepts the saved token (they expire about every 60 days). Get a new one on [this Smashrun page]({token_url}) and paste it here.",
@@ -20,8 +48,24 @@
         }
       },
       "reconfigure": {
+        "title": "Smashrun sign-in",
+        "description": "Change how Home Assistant gets the Smashrun token.",
+        "menu_options": {
+          "reconfigure_credentials": "Email and password (the token renews itself)",
+          "reconfigure_token": "Paste a personal access token"
+        }
+      },
+      "reconfigure_credentials": {
+        "title": "Smashrun email and password",
+        "description": "Home Assistant gets a new token with them now, and again before each one expires.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "reconfigure_token": {
         "title": "Replace the Smashrun token",
-        "description": "Paste a new token from [this Smashrun page]({token_url}), for example before the current one expires.",
+        "description": "Paste a new token from [this Smashrun page]({token_url}), for example before the current one expires. A saved email and password are removed: the token is then renewed by hand.",
         "data": {
           "access_token": "Access token"
         }
@@ -30,13 +74,15 @@
     "error": {
       "invalid_auth": "Smashrun rejected the token. Check that you copied all of it and that it has not expired.",
       "cannot_connect": "Could not connect to Smashrun.",
-      "unknown": "Unexpected error. Check the Home Assistant log."
+      "unknown": "Unexpected error. Check the Home Assistant log.",
+      "invalid_login": "Smashrun refused the email or password: {message}",
+      "login_failed": "Smashrun's login answered in an unexpected way. Check the Home Assistant log, or paste a token instead."
     },
     "abort": {
       "already_configured": "This Smashrun account is already configured.",
-      "reauth_successful": "Token updated.",
-      "wrong_account": "This token belongs to a different Smashrun account than the one configured.",
-      "reconfigure_successful": "Token updated."
+      "reauth_successful": "Smashrun sign-in updated.",
+      "wrong_account": "This belongs to a different Smashrun account than the one configured.",
+      "reconfigure_successful": "Smashrun sign-in updated."
     }
   },
   "options": {

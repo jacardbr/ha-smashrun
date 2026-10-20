@@ -9,13 +9,22 @@ from homeassistant.core import HomeAssistant
 
 from .coordinator import SmashrunConfigEntry
 
-TO_REDACT = {"token", "access_token", "refresh_token", "firstName", "lastName"}
+TO_REDACT = {
+    "token",
+    "access_token",
+    "refresh_token",
+    "email",
+    "password",
+    "firstName",
+    "lastName",
+}
 
 
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: SmashrunConfigEntry
 ) -> dict[str, Any]:
-    """Tokens and names redacted; raw payloads included to debug field names."""
+    """Tokens, email, password and names redacted; raw payloads included to
+    debug field names."""
     coordinator = entry.runtime_data
     data = coordinator.data
     return {

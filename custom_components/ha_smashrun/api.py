@@ -1,9 +1,14 @@
 """Async client for the Smashrun REST API (https://api.smashrun.com/v1).
 
-Auth model: a personal (user-level) access token, obtained by the user through
-Smashrun's implicit OAuth flow with client id "client". It is sent as
+Auth model: a personal (user-level) access token, obtained through Smashrun's
+implicit OAuth flow with client id "client". It is sent as
 `Authorization: Bearer <token>`, lasts about 60 days and cannot be refreshed.
 User-level tokens are limited to 250 requests per hour.
+
+The token comes either pasted by the user, or from `async_login`: with the
+account's email and password it calls the JSON service behind Smashrun's own
+authorization page (the "Connect" button), which answers with the same token.
+That service is not part of the documented API.
 
 Only the read endpoints are used:
   - GET /auth/{token}                        token check (expires_in)
@@ -26,6 +31,10 @@ import aiohttp
 _LOGGER = logging.getLogger(__name__)
 
 API_URL = "https://api.smashrun.com/v1"
+# Called by https://secure.smashrun.com/oauth2/authenticate?client_id=client...
+LOGIN_URL = "https://secure.smashrun.com/services/apiauth-jsonservice.asmx/ConnectUserLogin"
+LOGIN_CLIENT_ID = "client"
+LOGIN_SCOPES = "read_activity"
 
 _TIMEOUT = aiohttp.ClientTimeout(total=30)
 
@@ -47,6 +56,67 @@ class SmashrunAuthError(SmashrunError):
 
 class SmashrunRateLimitError(SmashrunError):
     """HTTP 429 from Smashrun."""
+
+
+class SmashrunLoginError(SmashrunError):
+    """Smashrun refused the email and password (its message is the text)."""
+
+
+async def async_login(
+    session: aiohttp.ClientSession, email: str, password: str
+) -> tuple[str, Optional[float]]:
+    """A new personal access token for the account: (token, expires_in seconds).
+
+    Raises SmashrunLoginError when Smashrun refuses the email or password,
+    SmashrunConnectionError on network errors and SmashrunError when the
+    answer has no token.
+    """
+    payload = {
+        "loginEmail": email.strip(),
+        "loginPassword": password,
+        "clientId": LOGIN_CLIENT_ID,
+        "scopes": LOGIN_SCOPES,
+        "isToken": True,
+    }
+    try:
+        async with session.post(
+            LOGIN_URL,
+            json=payload,
+            headers={"Accept": "application/json"},
+            timeout=_TIMEOUT,
+        ) as resp:
+            if resp.status == 429:
+                raise SmashrunRateLimitError("Rate limited on the Smashrun login")
+            if resp.status >= 400:
+                raise SmashrunError(f"HTTP {resp.status} from the Smashrun login")
+            data = await resp.json(content_type=None)
+    except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+        raise SmashrunConnectionError(str(err)) from err
+    except ValueError as err:
+        raise SmashrunError("Invalid JSON from the Smashrun login") from err
+    return parse_login_response(data)
+
+
+def parse_login_response(data: Any) -> tuple[str, Optional[float]]:
+    """(token, expires_in) from the login service's answer.
+
+    The answer looks like {"info": {"isFailed": bool, "message": str},
+    "results": {"auth": {"access_token": str, "expires_in": int}}}, sometimes
+    wrapped in {"d": ...} like other ASP.NET services.
+    """
+    if isinstance(data, dict) and isinstance(data.get("d"), dict):
+        data = data["d"]
+    if not isinstance(data, dict):
+        raise SmashrunError("Unexpected answer from the Smashrun login")
+    info = data.get("info") or {}
+    if info.get("isFailed") or info.get("isError"):
+        raise SmashrunLoginError(str(info.get("message") or "Smashrun login failed"))
+    results = data.get("results") or {}
+    auth = results.get("auth") if isinstance(results.get("auth"), dict) else results
+    token = auth.get("access_token") or auth.get("accessToken")
+    if not token or not isinstance(token, str):
+        raise SmashrunError("The Smashrun login answer has no access token")
+    return token.strip(), _num(auth.get("expires_in", auth.get("expiresIn")))
 
 
 def _num(value: Any) -> Optional[float]:
@@ -201,6 +271,10 @@ class SmashrunApi:
 
     def __init__(self, session: aiohttp.ClientSession, token: str) -> None:
         self._session = session
+        self._token = token
+
+    def set_token(self, token: str) -> None:
+        """Use a new token (after an automatic renewal)."""
         self._token = token
 
     async def _get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:

@@ -86,6 +86,10 @@ class FakeSession:
         self.calls.append((path, dict(params or {}), dict(headers or {})))
         return _Resp(*self.handler(path, params or {}))
 
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.calls.append((url, dict(json or {}), dict(headers or {})))
+        return _Resp(*self.handler(url, json or {}))
+
 
 def _client(handler):
     session = FakeSession(handler)
@@ -272,6 +276,71 @@ class ClientTests(unittest.TestCase):
         client, _ = _client(lambda p, q: (200, body))
         badges = run(client.async_get_badges(TZ))
         self.assertEqual([b.name for b in badges], ["New", "Old", "Undated"])
+
+
+class LoginTests(unittest.TestCase):
+    """Email/password login through Smashrun's authorization page service."""
+
+    OK = {
+        "info": {"isError": False, "isFailed": False, "message": None},
+        "results": {"auth": {"access_token": " new-token ", "expires_in": 5184000}},
+    }
+
+    def test_login_ok(self):
+        session = FakeSession(lambda url, body: (200, self.OK))
+        token, expires_in = run(api.async_login(session, " me@example.com ", "pw"))
+        self.assertEqual(token, "new-token")
+        self.assertEqual(expires_in, 5184000)
+        url, body, _ = session.calls[0]
+        self.assertEqual(url, api.LOGIN_URL)
+        self.assertEqual(
+            body,
+            {
+                "loginEmail": "me@example.com",
+                "loginPassword": "pw",
+                "clientId": "client",
+                "scopes": "read_activity",
+                "isToken": True,
+            },
+        )
+
+    def test_login_wrapped_in_d(self):
+        token, expires_in = api.parse_login_response({"d": self.OK})
+        self.assertEqual((token, expires_in), ("new-token", 5184000))
+
+    def test_login_refused(self):
+        # The real answer for an unknown email (seen with a made-up address).
+        refused = {
+            "info": {
+                "isError": False,
+                "isFailed": True,
+                "failCode": 1,
+                "message": "No user is registered with this email address",
+            },
+            "results": {},
+        }
+        session = FakeSession(lambda url, body: (200, refused))
+        with self.assertRaises(api.SmashrunLoginError) as ctx:
+            run(api.async_login(session, "nobody@example.com", "x"))
+        self.assertIn("No user is registered", str(ctx.exception))
+
+    def test_login_without_token(self):
+        with self.assertRaises(api.SmashrunError) as ctx:
+            api.parse_login_response({"info": {"isFailed": False}, "results": {}})
+        self.assertNotIsInstance(ctx.exception, api.SmashrunLoginError)
+        with self.assertRaises(api.SmashrunError):
+            api.parse_login_response("not json")
+
+    def test_login_http_error(self):
+        session = FakeSession(lambda url, body: (500, {}))
+        with self.assertRaises(api.SmashrunError):
+            run(api.async_login(session, "me@example.com", "pw"))
+
+    def test_set_token(self):
+        client, session = _client(lambda path, params: (200, {"id": 1}))
+        client.set_token("other")
+        run(client.async_get_userinfo())
+        self.assertEqual(session.calls[-1][2]["Authorization"], "Bearer other")
 
 
 class RunsUtilTests(unittest.TestCase):

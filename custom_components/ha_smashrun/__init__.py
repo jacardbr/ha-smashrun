@@ -26,9 +26,14 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 
-from .api import SmashrunApi, SmashrunAuthError, SmashrunError
+from .api import SmashrunApi, SmashrunAuthError, SmashrunError, SmashrunLoginError
 from .const import CONF_IMPORT_HISTORY, DOMAIN
-from .coordinator import SmashrunConfigEntry, SmashrunCoordinator
+from .coordinator import (
+    SmashrunConfigEntry,
+    SmashrunCoordinator,
+    async_renew_token,
+    has_credentials,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -135,17 +140,29 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: SmashrunConfigEntry) -> bool:
     """Set up Smashrun from a config entry."""
     api = SmashrunApi(async_get_clientsession(hass), entry.data[CONF_ACCESS_TOKEN])
+    token_expires = None
     try:
         user = await api.async_get_userinfo()
     except SmashrunAuthError as err:
-        # Expired (about every 60 days) or revoked: ask for a new token.
-        raise ConfigEntryAuthFailed(str(err)) from err
+        # Expired (about every 60 days) or revoked. With the email and
+        # password saved, get a new token; otherwise ask for one.
+        if not has_credentials(entry):
+            raise ConfigEntryAuthFailed(str(err)) from err
+        try:
+            token_expires = await async_renew_token(hass, entry, api)
+            user = await api.async_get_userinfo()
+        except (SmashrunLoginError, SmashrunAuthError) as login_err:
+            raise ConfigEntryAuthFailed(str(login_err)) from login_err
+        except SmashrunError as login_err:
+            raise ConfigEntryNotReady(str(login_err)) from login_err
     except SmashrunError as err:
         raise ConfigEntryNotReady(str(err)) from err
 
     _async_remove_old_entities(hass, str(user["id"]))
 
     coordinator = SmashrunCoordinator(hass, entry, api, user)
+    if token_expires is not None:
+        coordinator.token_expires = token_expires
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
 
