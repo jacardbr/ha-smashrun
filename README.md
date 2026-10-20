@@ -1,6 +1,6 @@
 # Smashrun for Home Assistant
 
-Custom integration (HACS) that brings your **Smashrun** runs into Home Assistant: your last run (distance, duration, pace, heart rate, cadence, elevation), your whole run history (totals, weekly/monthly/yearly distance, a calendar of every run and long-term statistics back to your first run) and your badges.
+Custom integration (HACS) that brings your **Smashrun** runs into Home Assistant: your last run (distance, duration, pace, max heart rate, elevation), your whole run history (totals, weekly/monthly/yearly distance, a calendar of every run and long-term statistics back to your first run) and your badge count.
 
 It uses the official [Smashrun API](https://api.smashrun.com/) with a **personal access token**, read-only (`read_activity` scope). No API key or password is needed.
 
@@ -38,14 +38,11 @@ Manual installation (without HACS): copy `custom_components/ha_smashrun` to `<yo
 
 | Entity | Unit | Notes |
 |---|---|---|
-| Last run | date/time | Start time. Attributes: `run_id`, `url`, `duration` (h:mm:ss), `pace_per_km`, `pace_per_mile`, `end`, and `raw` (every field the API returned) |
 | Last run distance | km | |
 | Last run duration | min | |
-| Last run pace | min/km or min/mi | Follows your Smashrun distance unit. The `pace` attribute has it as m:ss |
+| Last run pace | | Text in minutes:seconds, e.g. `5:52 /km` (or `/mi`, following your Smashrun distance unit). The `minutes` attribute has the same pace in decimal minutes (5.87) for templates |
 | Last run speed | km/h | Disabled by default |
-| Last run average heart rate | bpm | Only if the run has heart rate data |
-| Last run max heart rate | bpm | |
-| Last run cadence | spm | |
+| Last run max heart rate | bpm | Only if the run has heart rate data |
 | Last run elevation gain | m | |
 
 Distances and speeds are converted to miles automatically when Home Assistant uses US customary units.
@@ -67,9 +64,8 @@ The calendar shows every run you ever logged, so you can browse your history in 
 | Entity | Notes |
 |---|---|
 | Badges | Number of badges earned. The `recent_badges` attribute lists the last 10 |
-| Latest badge | Name of the most recent badge, with its image as the entity picture |
 
-The badges endpoint is listed by Smashrun but its response format is not documented, so these two sensors read it defensively. If the endpoint is not available for your token, they show as unavailable and the rest of the integration keeps working.
+The badges endpoint is listed by Smashrun but its response format is not documented, so this sensor reads it defensively. If the endpoint is not available for your token, it shows as unavailable and the rest of the integration keeps working.
 
 ### Token
 

@@ -55,9 +55,6 @@
       }
     },
     "sensor": {
-      "last_run": {
-        "name": "Last run"
-      },
       "last_run_distance": {
         "name": "Last run distance"
       },
@@ -70,14 +67,8 @@
       "last_run_speed": {
         "name": "Last run speed"
       },
-      "last_run_heart_rate_average": {
-        "name": "Last run average heart rate"
-      },
       "last_run_heart_rate_max": {
         "name": "Last run max heart rate"
-      },
-      "last_run_cadence": {
-        "name": "Last run cadence"
       },
       "last_run_elevation_gain": {
         "name": "Last run elevation gain"
@@ -108,9 +99,6 @@
       },
       "badges": {
         "name": "Badges"
-      },
-      "latest_badge": {
-        "name": "Latest badge"
       },
       "token_expires": {
         "name": "Token expires"

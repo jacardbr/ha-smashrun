@@ -55,9 +55,6 @@
       }
     },
     "sensor": {
-      "last_run": {
-        "name": "Última corrida"
-      },
       "last_run_distance": {
         "name": "Distância da última corrida"
       },
@@ -70,14 +67,8 @@
       "last_run_speed": {
         "name": "Velocidade da última corrida"
       },
-      "last_run_heart_rate_average": {
-        "name": "FC média da última corrida"
-      },
       "last_run_heart_rate_max": {
         "name": "FC máxima da última corrida"
-      },
-      "last_run_cadence": {
-        "name": "Cadência da última corrida"
       },
       "last_run_elevation_gain": {
         "name": "Ganho de elevação da última corrida"
@@ -108,9 +99,6 @@
       },
       "badges": {
         "name": "Badges"
-      },
-      "latest_badge": {
-        "name": "Último badge"
       },
       "token_expires": {
         "name": "Validade do token"

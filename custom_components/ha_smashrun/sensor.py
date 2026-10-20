@@ -27,7 +27,7 @@ from .api import SmashrunRun
 from .const import RECENT_BADGES
 from .coordinator import SmashrunConfigEntry, SmashrunCoordinator, SmashrunData
 from .entity import SmashrunEntity
-from .runs_util import KM_PER_MILE, format_duration, format_pace, period_start, totals
+from .runs_util import KM_PER_MILE, format_pace, period_start, totals
 
 StateType = float | int | str | datetime | None
 
@@ -45,11 +45,20 @@ def _last(attr: Callable[[SmashrunRun], Any]) -> Callable[[SmashrunData, Any], A
     return lambda data, _: attr(data.last_run) if data.last_run else None
 
 
-def _pace(data: SmashrunData, coordinator: SmashrunCoordinator) -> float | None:
+def _pace_minutes(data: SmashrunData, coordinator: SmashrunCoordinator) -> float | None:
+    """Pace in decimal minutes per km (or per mile for imperial users)."""
     pace = data.last_run.pace_min_per_km() if data.last_run else None
     if pace is None:
         return None
     return pace * KM_PER_MILE if coordinator.imperial else pace
+
+
+def _pace(data: SmashrunData, coordinator: SmashrunCoordinator) -> str | None:
+    """Pace as runners read it, "5:52 /km": a number like 5.86 min would mislead."""
+    text = format_pace(_pace_minutes(data, coordinator))
+    if text is None:
+        return None
+    return f"{text} /mi" if coordinator.imperial else f"{text} /km"
 
 
 def _period(period: str, index: int) -> Callable[[SmashrunData, Any], float | int]:
@@ -89,13 +98,6 @@ def _runs_in(period: str, enabled: bool) -> SmashrunSensorDescription:
 SENSORS: tuple[SmashrunSensorDescription, ...] = (
     # --- Last run ---------------------------------------------------------
     SmashrunSensorDescription(
-        key="last_run",
-        translation_key="last_run",
-        icon="mdi:run-fast",
-        device_class=SensorDeviceClass.TIMESTAMP,
-        value_fn=_last(lambda r: r.start),
-    ),
-    SmashrunSensorDescription(
         key="last_run_distance",
         translation_key="last_run_distance",
         icon="mdi:map-marker-distance",
@@ -118,7 +120,6 @@ SENSORS: tuple[SmashrunSensorDescription, ...] = (
         key="last_run_pace",
         translation_key="last_run_pace",
         icon="mdi:speedometer-slow",
-        suggested_display_precision=2,
         value_fn=_pace,
     ),
     SmashrunSensorDescription(
@@ -132,28 +133,12 @@ SENSORS: tuple[SmashrunSensorDescription, ...] = (
         value_fn=_last(lambda r: r.speed_kmh()),
     ),
     SmashrunSensorDescription(
-        key="last_run_heart_rate_average",
-        translation_key="last_run_heart_rate_average",
-        icon="mdi:heart-pulse",
-        native_unit_of_measurement="bpm",
-        suggested_display_precision=0,
-        value_fn=_last(lambda r: r.value("heartRateAverage")),
-    ),
-    SmashrunSensorDescription(
         key="last_run_heart_rate_max",
         translation_key="last_run_heart_rate_max",
         icon="mdi:heart-flash",
         native_unit_of_measurement="bpm",
         suggested_display_precision=0,
         value_fn=_last(lambda r: r.value("heartRateMax")),
-    ),
-    SmashrunSensorDescription(
-        key="last_run_cadence",
-        translation_key="last_run_cadence",
-        icon="mdi:shoe-print",
-        native_unit_of_measurement="spm",
-        suggested_display_precision=0,
-        value_fn=_last(lambda r: r.value("cadenceAverage")),
     ),
     SmashrunSensorDescription(
         key="last_run_elevation_gain",
@@ -199,13 +184,6 @@ SENSORS: tuple[SmashrunSensorDescription, ...] = (
         badges=True,
         value_fn=lambda data, _: len(data.badges),
     ),
-    SmashrunSensorDescription(
-        key="latest_badge",
-        translation_key="latest_badge",
-        icon="mdi:medal-outline",
-        badges=True,
-        value_fn=lambda data, _: data.badges[0].name if data.badges else None,
-    ),
     # --- Token ------------------------------------------------------------
     SmashrunSensorDescription(
         key="token_expires",
@@ -232,18 +210,14 @@ class SmashrunSensor(SmashrunEntity, SensorEntity):
     """A value derived from the coordinator data."""
 
     entity_description: SmashrunSensorDescription
-    # The raw run payload and the badge list are large; keep them out of the DB.
-    _unrecorded_attributes = frozenset({"raw", "recent_badges"})
+    # The badge list is large; keep it out of the DB.
+    _unrecorded_attributes = frozenset({"recent_badges"})
 
     def __init__(
         self, coordinator: SmashrunCoordinator, description: SmashrunSensorDescription
     ) -> None:
         super().__init__(coordinator, description.key)
         self.entity_description = description
-        if description.key == "last_run_pace":
-            self._attr_native_unit_of_measurement = (
-                "min/mi" if coordinator.imperial else "min/km"
-            )
 
     @property
     def available(self) -> bool:
@@ -262,31 +236,16 @@ class SmashrunSensor(SmashrunEntity, SensorEntity):
         return period_start(dt_util.now(), self.entity_description.period)
 
     @property
-    def entity_picture(self) -> str | None:
-        if self.entity_description.key == "latest_badge" and self.coordinator.data.badges:
-            return self.coordinator.data.badges[0].image
-        return None
-
-    @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         data = self.coordinator.data
         key = self.entity_description.key
 
-        if key == "last_run" and data.last_run is not None:
-            run = data.last_run
-            pace = run.pace_min_per_km()
-            return {
-                "run_id": run.run_id,
-                "url": self.run_url(run.run_id),
-                "distance_km": run.distance_km,
-                "duration": format_duration(run.duration_s),
-                "pace_per_km": format_pace(pace),
-                "pace_per_mile": format_pace(pace * KM_PER_MILE if pace else None),
-                "end": run.end.isoformat() if run.end else None,
-                "raw": run.raw,
-            }
         if key == "last_run_pace" and data.last_run is not None:
-            return {"pace": format_pace(self.native_value)}
+            minutes = _pace_minutes(data, self.coordinator)
+            return {
+                "minutes": round(minutes, 3) if minutes is not None else None,
+                "unit": "min/mi" if self.coordinator.imperial else "min/km",
+            }
         if key == "badges":
             return {
                 "recent_badges": [
@@ -297,12 +256,5 @@ class SmashrunSensor(SmashrunEntity, SensorEntity):
                     }
                     for b in data.badges[:RECENT_BADGES]
                 ]
-            }
-        if key == "latest_badge" and data.badges:
-            badge = data.badges[0]
-            return {
-                "earned": badge.earned.isoformat() if badge.earned else None,
-                "description": badge.description,
-                "image": badge.image,
             }
         return None
