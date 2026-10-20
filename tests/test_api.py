@@ -431,6 +431,19 @@ class RunsUtilTests(unittest.TestCase):
         self.assertEqual(bucket(47.999), "42k")
         self.assertIsNone(bucket(48.0))  # ultras are not counted
 
+    def test_best_days(self):
+        best = runs_util.best_days(self._runs(), TZ)
+        # 2026-10-12 has two runs (5 + 2 km): 7 km, less than the 10 km day.
+        self.assertEqual(best["2026"], {"date": "2026-10-19", "km": 10.0})
+        self.assertEqual(best["2025"], {"date": "2025-12-31", "km": 21.1})
+        runs = self._runs() + [
+            api.SmashrunRun.from_json(
+                {"runId": 6, "startTime": "2026-10-12T18:00:00-03:00", "distance": 4, "duration": 1200}, TZ
+            )
+        ]
+        # Now 2026-10-12 adds up to 11 km.
+        self.assertEqual(runs_util.best_days(runs, TZ)["2026"], {"date": "2026-10-12", "km": 11.0})
+
     def test_weekly_summary(self):
         weeks = runs_util.weekly_summary(self._runs(), TZ)
         # 2026-10-12 is a Monday of ISO week 42; 2026-10-19 of week 43.

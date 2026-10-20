@@ -216,6 +216,23 @@ def weekly_summary(runs: Iterable[Any], tz: tzinfo) -> dict[str, list[float]]:
     return {year: [round(km, 3) for km in kms] for year, kms in sorted(weeks.items())}
 
 
+def best_days(runs: Iterable[Any], tz: tzinfo) -> dict[str, dict[str, Any]]:
+    """Per local year, the day with the most kilometres (all runs of that
+    day added up): {"2026": {"date": "2026-03-14", "km": 32.5}}."""
+    days: dict[str, float] = {}
+    for run in runs:
+        if run.start is None or not run.distance_km:
+            continue
+        day = run.start.astimezone(tz).date().isoformat()
+        days[day] = days.get(day, 0.0) + run.distance_km
+    best: dict[str, dict[str, Any]] = {}
+    for day, km in sorted(days.items()):
+        year = day[:4]
+        if year not in best or km > best[year]["km"]:
+            best[year] = {"date": day, "km": round(km, 3)}
+    return best
+
+
 def personal_records(
     runs: Iterable[Any], tz: tzinfo
 ) -> dict[str, dict[str, Optional[dict[str, Any]]]]:

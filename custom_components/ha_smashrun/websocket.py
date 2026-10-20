@@ -13,6 +13,7 @@ from .const import DOMAIN
 from .runs_util import (
     COUNT_BUCKETS,
     RECORD_DISTANCES,
+    best_days,
     count_buckets,
     personal_records,
     weekly_summary,
@@ -76,6 +77,7 @@ def ws_summary(hass: HomeAssistant, connection, msg) -> None:
             "username": username,
             "years": yearly_summary(runs, tz, buckets),
             "weeks": weekly_summary(runs, tz),
+            "best_days": best_days(runs, tz),
             "record_distances": RECORD_DISTANCES,
             "records": records,
             "count_buckets": buckets,

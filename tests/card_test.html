@@ -8,6 +8,7 @@
   The page prints "RESULT: PASS (n checks)" or "RESULT: FAIL ..." in #out.
   Add ?demo=statistics|records|count (and &lang=pt, &theme=dark, &units=mi, &w=340,
   &mode=monthly|volume and &detail=1 (open the table) for the statistics tab,
+  &rmode=volume for the records tab,
   &hover=<month 0-11> to show the chart tooltip)
   to show one card for a screenshot instead of running the checks.
 -->
@@ -68,6 +69,12 @@ const SUMMARY = {
   username: "runner",
   years,
   weeks,
+  best_days: {
+    [String(thisYear - 3)]: { date: `${thisYear - 3}-04-02`, km: 21.4 },
+    [String(thisYear - 2)]: { date: `${thisYear - 2}-09-15`, km: 30.2 },
+    [String(thisYear - 1)]: { date: `${thisYear - 1}-05-10`, km: 42.6 },
+    [String(thisYear)]: { date: `${thisYear}-03-14`, km: 25.0 },
+  },
   record_distances: { "5k": 5, "10k": 10, "21k": 21.0975, "42k": 42.195 },
   count_buckets: { lt5k: [0, 4.5], "5k": [4.5, 9.5], "10k": [9.5, 20.5], "21k": [20.5, 41.5], "42k": [41.5, 48] },
   records: {
@@ -91,10 +98,11 @@ const SUMMARY = {
   },
 };
 
-function makeHass({ lang = "en", units = "km", runs = "42", fail = false } = {}) {
+function makeHass({ lang = "en", units = "km", runs = "42", fail = false, dark = params.get("theme") === "dark" } = {}) {
   const calls = [];
   return {
     calls,
+    themes: { darkMode: dark },
     language: lang,
     locale: { language: lang },
     config: { unit_system: { length: units } },
@@ -143,6 +151,17 @@ function hoverBar(card, name, i, type = "click") {
   wrap.dispatchEvent(new MouseEvent(type, { clientX: rect.left + (x / W) * rect.width, clientY: rect.top + 40, bubbles: true, composed: true }));
 }
 
+// Selects every year ("all") or none ("none") with the All/None button.
+function bulk(card, which) {
+  for (let i = 0; i < 2; i++) {
+    const btn = $(card, ".chip.bulk");
+    const state = $$(card, ".chip:not(.bulk)");
+    const done = which === "all" ? state.every((c) => c.classList.contains("on")) : state.every((c) => !c.classList.contains("on"));
+    if (done) return;
+    btn.click();
+  }
+}
+
 // Moves the pointer over the chart at the given month (0-11).
 function hoverMonth(card, month, type = "pointermove") {
   const wrap = $(card, ".chart-wrap");
@@ -165,6 +184,10 @@ async function demo() {
     await tick(); await tick();
     $(document.querySelector("ha-smashrun-card"), `[data-mode="${params.get("mode")}"]`).click();
   }
+  if (params.get("rmode")) {
+    await tick(); await tick();
+    $(document.querySelector("ha-smashrun-card"), `[data-record-mode="${params.get("rmode")}"]`).click();
+  }
   if (params.get("detail")) {
     await tick(); await tick();
     $(document.querySelector("ha-smashrun-card"), "button.detail").click();
@@ -182,7 +205,7 @@ async function run() {
   let card = mount({}, hass);
   await tick(); await tick();
   eq(hass.calls, [{ type: "ha_smashrun/summary" }], "one WebSocket call");
-  eq($$(card, ".tab").map((b) => b.textContent), ["Statistics", "Personal records", "Count"], "tab labels");
+  eq($$(card, ".tab").map((b) => b.textContent), ["Statistics", "Personal Records", "Count"], "tab labels");
   ok($(card, ".tab.active").dataset.tab === "statistics", "statistics is the default tab");
   eq($$(card, ".chip:not(.bulk).on").map((c) => c.dataset.year), [thisYear, thisYear - 1].map(String), "last 2 years selected");
   eq($$(card, ".chart path").length, 2, "one line per selected year");
@@ -276,20 +299,27 @@ async function run() {
   $(card, `.chip[data-year="${thisYear}"]`).click();
   eq($$(card, ".chart path").length, 2, "deselecting removes a line");
   // All / None buttons.
-  eq($$(card, ".chip.bulk").map((b) => b.textContent), ["All", "None"], "bulk buttons");
-  ok($(card, ".chips").firstElementChild.dataset.bulk === "all", "All comes first");
-  ok($(card, ".chips").lastElementChild.dataset.bulk === "none", "None comes last");
-  ok(!$(card, '[data-bulk="all"]').classList.contains("on"), "All is off with some years");
-  $(card, '[data-bulk="none"]').click();
-  eq($$(card, ".chart path").length, 0, "None clears the chart");
-  ok($(card, '[data-bulk="none"]').classList.contains("on"), "None is on with no year");
-  $(card, '[data-bulk="all"]').click();
+  // One All/None button, first: "All" while some years are off, then "None".
+  eq($$(card, ".chip.bulk").map((b) => b.textContent), ["All"], "one All/None button");
+  ok($(card, ".chips").firstElementChild.classList.contains("bulk"), "All/None comes first");
+  const onChip = getComputedStyle($(card, ".chip:not(.bulk).on")), bulkChip = getComputedStyle($(card, ".chip.bulk"));
+  const offChip = getComputedStyle($(card, ".chip:not(.bulk):not(.on)"));
+  ok(onChip.borderTopWidth === offChip.borderTopWidth && onChip.borderTopWidth === "1px", "selected and other years: same 1 px border");
+  ok(onChip.borderTopColor === getComputedStyle($(card, ".tab.active")).color, "light theme: selected year's border in Home Assistant's blue");
+  ok(onChip.color === onChip.borderTopColor, "selected year's text in the border color");
+  ok(bulkChip.color === onChip.color, "All/None in the same color as the years");
+  $(card, ".chip.bulk").click();
   eq($$(card, ".chart path").length, 4, "All selects every year");
-  ok($(card, '[data-bulk="all"]').classList.contains("on"), "All is on with every year");
+  eq($(card, ".chip.bulk").textContent, "None", "with every year it reads None");
+  $(card, ".chip.bulk").click();
+  eq($$(card, ".chart path").length, 0, "None clears the chart");
+  eq($(card, ".chip.bulk").textContent, "All", "with no year it reads All");
+  $(card, ".chip.bulk").click();
+  eq($$(card, ".chart path").length, 4, "All again");
   $(card, `.chip[data-year="${thisYear}"]`).click();
 
   // Volume: bar charts per week, month and year of the selected years.
-  $(card, '[data-bulk="none"]').click();
+  bulk(card, "none");
   $(card, `.chip[data-year="${thisYear}"]`).click();
   $(card, `.chip[data-year="${thisYear - 1}"]`).click();
   $(card, '[data-mode="volume"]').click();
@@ -357,7 +387,7 @@ async function run() {
   $(card, '[data-mode="cumulative"]').click();
   ok($(card, ".table"), "table back in cumulative mode");
   // Back to the selection of before (last three years but this one).
-  $(card, '[data-bulk="none"]').click();
+  bulk(card, "none");
   [1, 2, 3].forEach((i) => $(card, `.chip[data-year="${thisYear - i}"]`).click());
 
   // Same hass state: no reload. A new run changes the sensor: reload.
@@ -396,21 +426,52 @@ async function run() {
   $(card, '[data-tab="statistics"]').click();
   eq($$(card, ".chip:not(.bulk).on").map((c) => c.dataset.year), [thisYear - 1, thisYear - 2, thisYear - 3].map(String), "chart selection is separate");
   $(card, '[data-tab="records"]').click();
-  ok($(card, ".note").textContent.includes("average pace"), "estimate note");
+  ok(!$(card, ".note"), "no note under the records");
+  const oneLine = () => new Set($$(card, ".tiles.row .tile").map((t) => Math.round(t.getBoundingClientRect().top))).size === 1;
+  ok($$(card, ".tiles.row .tile").length === 4 && oneLine(), "records: four tiles on one line");
+
+  // Records: Performance and Volume sub-tabs, Performance at first.
+  eq($$(card, "[data-record-mode]").map((b) => b.textContent), ["Performance", "Volume"], "records sub-tabs");
+  ok($(card, '[data-record-mode="performance"]').classList.contains("on"), "Performance at first");
+  bulk(card, "all");
+  $(card, '[data-record-mode="volume"]').click();
+  eq($$(card, ".tile .label").map((l) => l.textContent), ["Day", "Week", "Month", "Year"], "biggest day, week, month, year");
+  ok(oneLine(), "records volume: four tiles on one line");
+  ok(!$(card, ".note"), "no note under the records volume");
+  ok(new Set($$(card, ".tiles.row .yeartag").map((t) => Math.round(t.getBoundingClientRect().top))).size === 1, "records volume: year tags at the same height");
+  const allMonths = Object.entries(years).flatMap(([y, d]) => d.months_km.map((km, i) => ({ y, i, km })));
+  const topMonth = allMonths.reduce((a, b) => (b.km > a.km ? b : a));
+  const allWeeks = Object.entries(weeks).flatMap(([y, kms]) => kms.map((km, i) => ({ y, w: i + 1, km })));
+  const topWeek = allWeeks.reduce((a, b) => (b.km > a.km ? b : a));
+  const topYear = Object.keys(years).map((y) => ({ y, km: years[y].months_km.reduce((a, b) => a + b, 0) })).reduce((a, b) => (b.km > a.km ? b : a));
+  const f1 = (v) => v.toLocaleString("en", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  eq($$(card, ".tile .value").map((v) => v.textContent),
+    ["42.6 km", `${f1(topWeek.km)} km`, `${fmt0(topMonth.km)} km`, `${fmt0(topYear.km)} km`], "biggest values");
+  eq($$(card, ".tile .yeartag").map((t) => t.textContent), [String(thisYear - 1), topWeek.y, topMonth.y, topYear.y], "year tags");
+  ok($(card, '[data-best="week"] .pace').textContent === `Week ${topWeek.w}` && $(card, '[data-best="month"] .pace').textContent.length > 2, "week number and month name");
+  // The year chips filter it too.
+  bulk(card, "none");
+  $(card, `.chip[data-record-year="${thisYear}"]`).click();
+  ok($(card, '[data-best="day"] .value').textContent === "25.0 km", "biggest day of the selected year");
+  bulk(card, "none");
+  ok($$(card, ".tile.empty-tile").length === 4, "no year selected: empty tiles");
+  $(card, '[data-record-mode="performance"]').click();
 
   // Count tab: only the latest year selected by default.
   $(card, '[data-tab="count"]').click();
   eq($$(card, ".tile .label").map((l) => l.textContent), ["<5K", "5K", "10K", "21K", "42K", "Total"], "count distances");
+  ok(!$(card, ".note"), "no note under the count");
   eq($$(card, ".chip:not(.bulk).on").map((c) => c.dataset.countYear), [String(thisYear)], "count: latest year selected");
   eq($$(card, ".tile .value").map((v) => v.textContent), ["6", "35", "14", "3", "1", "59"], "counts of this year");
-  ok($$(card, ".tile .meta")[0].textContent.includes("< 4.5 km"), "under 5K range");
-  ok($$(card, ".tile .meta")[1].textContent.includes("4.5 – 9.5 km"), "range shown");
-  ok($$(card, ".tile .meta")[4].textContent.includes("41.5 – 48.0 km"), "last range");
+  ok(!$(card, ".tile .meta") && !$(card, ".tile .range"), "no range description");
+  const barWidths = $$(card, ".tile .bar span").map((b) => parseFloat(b.style.width));
+  const expected = [6, 35, 14, 3, 1, 59].map((n) => (100 * n) / 59);
+  ok(barWidths.length === 6 && barWidths.every((w, i) => Math.abs(w - expected[i]) < 0.01), "bars relative to the total (the Total bar is full)");
   $(card, `.chip[data-count-year="${thisYear - 1}"]`).click();
   eq($$(card, ".tile .value").map((v) => v.textContent), ["11", "65", "26", "5", "2", "109"], "counts of two years");
-  $(card, '[data-bulk="all"]').click();
+  bulk(card, "all");
   eq($$(card, ".tile .value").map((v) => v.textContent), ["18", "110", "44", "6", "2", "180"], "All in the count tab");
-  $(card, '[data-bulk="none"]').click();
+  bulk(card, "none");
   eq($$(card, ".tile").length, 0, "None in the count tab: no tiles");
   ok($(card, ".empty").textContent.includes("No runs in the selected years"), "empty message");
   $(card, `.chip[data-count-year="${thisYear - 3}"]`).click();
@@ -427,9 +488,9 @@ async function run() {
   eq($$(card, ".tab").map((b) => b.textContent), ["Estatísticas", "Recordes pessoais", "Contagem"], "Portuguese tabs");
   ok($$(card, ".tile .pace")[0].textContent === "6:55 /mi", "pace per mile");
   ok($$(card, ".tile .meta")[1].textContent.includes("7,7 mi"), "longer run in miles, pt decimals");
-  eq($$(card, ".chip.bulk").map((b) => b.textContent), ["Todos", "Nenhum"], "Portuguese bulk buttons");
+  eq($(card, ".chip.bulk").textContent, "Nenhum", "Portuguese None (every year selected in the records)");
   $(card, '[data-tab="count"]').click();
-  ok($$(card, ".tile .meta")[1].textContent.includes("2,8 – 5,9 mi"), "count range in miles");
+  ok(!$(card, ".tile .meta"), "no range description in miles either");
 
   // Errors are shown, not thrown.
   hass = makeHass({ fail: true });
@@ -469,6 +530,27 @@ async function run() {
   ok(scroller("week").scrollLeft === 0, "scroll kept after the person scrolls");
   scroller("week").style.width = "";
   } else skipped.push("auto-scroll once shown (needs a browser that draws frames)");
+
+  // Narrow card: the year filter stays on one line and scrolls sideways.
+  stage.style.width = "300px";
+  hass = makeHass();
+  card = mount({}, hass);
+  await tick(); await tick();
+  const chipsRow = $(card, ".chips");
+  ok(new Set($$(card, ".chips .chip").map((c) => Math.round(c.getBoundingClientRect().top))).size === 1, "narrow card: filter on one line");
+  ok(chipsRow.scrollWidth > chipsRow.clientWidth, "narrow card: filter scrolls sideways");
+  stage.style.width = "";
+
+  // Dark theme: white border on the selected years; switching themes redraws.
+  hass = makeHass({ dark: true });
+  card = mount({}, hass);
+  await tick(); await tick();
+  const darkOn = getComputedStyle($(card, ".chip:not(.bulk).on"));
+  ok(darkOn.borderTopColor === getComputedStyle($(card, ".tab:not(.active)")).color, "dark theme: border in the color of the tabs not selected");
+  ok(darkOn.color === darkOn.borderTopColor && getComputedStyle($(card, ".chip.bulk")).color === darkOn.color, "dark theme: selected year's text and All/None in the border color");
+  card.hass = makeHass({ dark: false });
+  await tick();
+  ok(getComputedStyle($(card, ".chip:not(.bulk).on")).borderTopColor === getComputedStyle($(card, ".tab.active")).color, "back to light: blue border");
 
   // Config validation and entry_id.
   let threw = false;

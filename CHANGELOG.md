@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Card, **Personal Records** tab: two views, **Performance** (the fastest 5K, 10K, 21K and 42K, as before) and the new **Volume**: the most kilometres in one day, week, month and year of the selected years, each with its year tag. The integration now also sends the biggest day of each year.
+- Card, **Personal Records** tab: the four tiles sit on one line (scrolling sideways on very narrow cards).
+- Card: the explanatory notes under the **Count** and **Personal Records** tiles were removed (the README keeps the explanations).
+- Card: the **Personal records** tab is now **Personal Records**.
+- Card, **Count** tab: the tiles no longer show the km range, and each bar is the range's share of the total (the Total bar is full).
+- Card: the year filter sits lower and stays on one line, scrolling sideways when it does not fit. **All** and **None** are now one button: it reads All, and None once every year is selected. Selected years (and the All/None button) have their text and border in Home Assistant's blue on a light theme, and in the color of the tabs not selected on a dark theme, instead of the year's color.
+
 ## 0.3.0
 
 - Card, **Statistics** tab: the last **2** years are selected at first (was 3).

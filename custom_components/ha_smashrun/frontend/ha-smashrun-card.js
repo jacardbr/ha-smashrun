@@ -6,7 +6,9 @@
  *                       (cumulative or per month) or bar charts of the
  *                       volume per week, month and year, with year filters
  *                       and a year-over-year table
- *   - Personal records: fastest 5K, 10K, 21K and 42K in the selected years
+ *   - Personal Records: Performance (fastest 5K, 10K, 21K and 42K) or Volume
+ *                       (most km in a day, week, month and year) in the
+ *                       selected years
  *   - Count:            number of runs per distance (<5K, 5K, 10K, 21K, 42K)
  *                       in the selected years
  * Plain JavaScript, no dependencies. Distances follow the Home Assistant unit
@@ -50,11 +52,13 @@ const PALETTE = [
 const STRINGS = {
   en: {
     statistics: "Statistics",
-    records: "Personal records",
+    records: "Personal Records",
     count: "Count",
     cumulative: "Cumulative",
     monthly: "Monthly",
     volume: "Volume",
+    performance: "Performance",
+    day: "Day",
     detail: "Detail",
     week: "Week",
     week_n: "Week {n}",
@@ -65,19 +69,15 @@ const STRINGS = {
     per_run: "Per run",
     vs_prev: "Comparison",
     from_run: "from a {d} run",
-    records_note:
-      "Estimated from the average pace of runs at least this long (Smashrun's API has no splits for every run). For races of the exact distance it is the real time.",
     no_record: "No run this long yet",
     no_data: "No runs yet.",
     no_runs_selected: "No runs in the selected years.",
     loading: "Loading…",
     error: "Could not load Smashrun data: {e}",
     open_run: "Open on Smashrun",
-    count_note: "Each run counts in the range of its distance. Runs outside these ranges are not counted.",
     select_years: "Years",
     all: "All",
     total: "Total",
-    all_ranges: "All ranges",
     none: "None",
     same_period: "Year in progress: compared with January to {m} of the year below it.",
   },
@@ -88,6 +88,8 @@ const STRINGS = {
     cumulative: "Acumulado",
     monthly: "Mensal",
     volume: "Volume",
+    performance: "Desempenho",
+    day: "Dia",
     detail: "Detalhes",
     week: "Semana",
     week_n: "Semana {n}",
@@ -98,19 +100,15 @@ const STRINGS = {
     per_run: "Por corrida",
     vs_prev: "Comparação",
     from_run: "numa corrida de {d}",
-    records_note:
-      "Estimado pelo pace médio das corridas com pelo menos essa distância (a API do Smashrun não traz as parciais de todas as corridas). Para provas da distância exata, é o tempo real.",
     no_record: "Nenhuma corrida com essa distância ainda",
     no_data: "Nenhuma corrida ainda.",
     no_runs_selected: "Nenhuma corrida nos anos selecionados.",
     loading: "Carregando…",
     error: "Não foi possível carregar os dados do Smashrun: {e}",
     open_run: "Abrir no Smashrun",
-    count_note: "Cada corrida conta na faixa da sua distância. Corridas fora dessas faixas não entram.",
     select_years: "Anos",
     all: "Todos",
     total: "Total",
-    all_ranges: "Todas as faixas",
     none: "Nenhum",
     same_period: "Ano em andamento: comparado com janeiro a {m} do ano abaixo dele.",
   },
@@ -169,7 +167,8 @@ class HaSmashrunCard extends HTMLElement {
     this._loadedAt = 0;
     this._tab = "statistics";
     this._mode = "cumulative";
-    this._showTable = false; // year table under the line chart (Detail button)
+    this._showTable = false;
+    this._recordMode = "performance"; // records tab: performance | volume // year table under the line chart (Detail button)
     this._years = null; // selected years in the chart (Set), null = default
     this._recordYears = null; // selected years in the records (Set), null = default
     this._countYears = null; // selected years in the count (Set), null = default
@@ -247,7 +246,7 @@ class HaSmashrunCard extends HTMLElement {
           default_tab: "Starting tab",
           entry_id: "Smashrun account",
           statistics_years: "Statistics",
-          records_years: "Personal records",
+          records_years: "Personal Records",
           count_years: "Count",
           range_5k: "5K starts at",
           range_10k: "10K starts at",
@@ -294,8 +293,10 @@ class HaSmashrunCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     const lang = this._language();
-    if (lang !== this._lang) {
+    const dark = this._darkMode();
+    if (lang !== this._lang || dark !== this._dark) {
       this._lang = lang;
+      this._dark = dark;
       this._render();
     }
     this._maybeLoad();
@@ -310,6 +311,11 @@ class HaSmashrunCard extends HTMLElement {
   }
 
   // ---- data --------------------------------------------------------------
+
+  // Home Assistant's dark mode (the theme setting, or the system's).
+  _darkMode() {
+    return Boolean(this._hass && this._hass.themes && this._hass.themes.darkMode);
+  }
 
   _language() {
     const hass = this._hass;
@@ -456,13 +462,13 @@ class HaSmashrunCard extends HTMLElement {
     return years.filter((y) => this._countYears.has(y));
   }
 
-  // Year filter: All, one chip per year (newest first), then None. `set` is
-  // the property holding the selection (_years, _recordYears, _countYears).
+  // Year filter: one All/None button, then one chip per year (newest
+  // first). The button reads "All" (select every year) unless every year is
+  // already selected, then "None" (clear them). `set` is the property
+  // holding the selection (_years, _recordYears, _countYears).
   _chips(selected, attr, set) {
-    const bulk = (which, on) =>
-      `<button class="chip bulk${on ? " on" : ""}" data-bulk="${which}" data-set="${set}" aria-pressed="${on}">${esc(
-        this._t(which)
-      )}</button>`;
+    const action = selected.length === this._yearList().length ? "none" : "all";
+    const bulk = `<button class="chip bulk" data-bulk="${action}" data-set="${set}">${esc(this._t(action))}</button>`;
     const years = this._yearList()
       .slice()
       .reverse()
@@ -473,7 +479,7 @@ class HaSmashrunCard extends HTMLElement {
         )}"><span class="dot"></span>${y}</button>`;
       })
       .join("");
-    return bulk("all", selected.length === this._yearList().length) + years + bulk("none", !selected.length);
+    return bulk + years;
   }
 
   // ---- rendering ---------------------------------------------------------
@@ -498,7 +504,7 @@ class HaSmashrunCard extends HTMLElement {
 
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>
-      <ha-card>
+      <ha-card class="${this._darkMode() ? "dark" : ""}">
         ${title ? `<div class="title">${esc(title)}</div>` : ""}
         <div class="tabs" role="tablist">${tabs}</div>
         <div class="body">${body}</div>
@@ -569,6 +575,12 @@ class HaSmashrunCard extends HTMLElement {
         this._render();
       });
     }
+    root.querySelectorAll("[data-record-mode]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        this._recordMode = btn.dataset.recordMode;
+        this._render();
+      })
+    );
     root.querySelectorAll("[data-mode]").forEach((btn) =>
       btn.addEventListener("click", () => {
         this._mode = btn.dataset.mode;
@@ -1009,12 +1021,86 @@ class HaSmashrunCard extends HTMLElement {
       ${detail}${this._showTable ? table : ""}`;
   }
 
-  // ---- Personal records tab ----------------------------------------------
+  // ---- Personal Records tab ----------------------------------------------
 
   _records() {
+    const selected = this._selectedRecordYears();
+    const modes = ["performance", "volume"]
+      .map(
+        (m) =>
+          `<button class="seg${m === this._recordMode ? " on" : ""}" data-record-mode="${m}">${esc(this._t(m))}</button>`
+      )
+      .join("");
+    return `
+      <div class="toolbar"><div class="segmented">${modes}</div></div>
+      <div class="chips" aria-label="${esc(this._t("select_years"))}">${this._chips(selected, "data-record-year", "_recordYears")}</div>
+      ${this._recordMode === "volume" ? this._biggest(selected) : this._performance(selected)}`;
+  }
+
+  // A year as a tag in the year's color, with `title` on hover and an
+  // optional link.
+  _yearTag(year, title, url) {
+    const attrs = `class="yeartag" style="--c:${this._yearColor(String(year))}" title="${esc(title)}"`;
+    return url
+      ? `<a ${attrs} href="${esc(url)}" target="_blank" rel="noopener" aria-label="${esc(this._t("open_run"))}: ${esc(
+          title
+        )}"><span class="dot"></span>${esc(year)}</a>`
+      : `<span ${attrs}><span class="dot"></span>${esc(year)}</span>`;
+  }
+
+  // Records, Volume: the most kilometres in one day, week, month and year of
+  // the selected years, each with its year tag.
+  _biggest(selected) {
+    const years = this._data.years;
+    const weeks = this._data.weeks || {};
+    const days = this._data.best_days || {};
+    let day = null;
+    let week = null;
+    let month = null;
+    let year = null;
+    selected.forEach((y) => {
+      const d = days[y];
+      if (d && (!day || d.km > day.km)) day = { ...d, year: y };
+      (weeks[y] || []).forEach((km, i) => {
+        if (km > 0 && (!week || km > week.km)) week = { km, year: y, week: i + 1 };
+      });
+      years[y].months_km.forEach((km, i) => {
+        if (km > 0 && (!month || km > month.km)) month = { km, year: y, month: i };
+      });
+      const total = years[y].months_km.reduce((a, b) => a + b, 0);
+      if (total > 0 && (!year || total > year.km)) year = { km: total, year: y };
+    });
+
+    const tile = (key, best, digits, when) => {
+      if (!best) {
+        return `<div class="tile empty-tile">
+          <div class="label">${esc(this._t(key))}</div>
+          <div class="value">—</div>
+          <div class="meta">${esc(this._t("no_runs_selected"))}</div>
+        </div>`;
+      }
+      return `<div class="tile" data-best="${key}">
+        <div class="label">${esc(this._t(key))}</div>
+        <div class="value">${esc(this._fmtDist(best.km, digits))}</div>
+        <div class="pace">${esc(when ? when.charAt(0).toUpperCase() + when.slice(1) : "")}</div>
+        <div class="meta">${this._yearTag(best.year, when || best.year)}</div>
+      </div>`;
+    };
+    const dayWhen = day ? this._fmtDate(`${day.date}T12:00:00`, { weekday: "short", day: "numeric", month: "short" }) : "";
+    const tiles = [
+      tile("day", day, 1, dayWhen),
+      tile("week", week, 1, week ? this._t("week_n", { n: week.week }) : ""),
+      tile("month", month, 0, month ? this._monthLong(month.month) : ""),
+      tile("year", year, 0, ""),
+    ].join("");
+    return `
+      <div class="tiles row">${tiles}</div>`;
+  }
+
+  // Records, Performance: fastest 5K, 10K, 21K and 42K of the selected years.
+  _performance(selected) {
     const all = this._data.records || {};
     const distances = this._data.record_distances || {};
-    const selected = this._selectedRecordYears();
     const everyYear = selected.length === this._yearList().length;
 
     // Every year selected: the all-time records. Otherwise the fastest of
@@ -1040,15 +1126,8 @@ class HaSmashrunCard extends HTMLElement {
       }
       const target = distances[key] || 0;
       const longer = target && rec.run_distance_km > target * 1.02;
-      const date = esc(this._fmtDate(rec.start));
       // The year as a tag in the year's color; the date shows on hover.
-      const year = String(this._recordYearOf(rec));
-      const tagAttrs = `class="yeartag" style="--c:${this._yearColor(year)}" title="${date}"`;
-      const tag = rec.url
-        ? `<a ${tagAttrs} href="${esc(rec.url)}" target="_blank" rel="noopener" aria-label="${esc(
-            this._t("open_run")
-          )}: ${date}"><span class="dot"></span>${esc(year)}</a>`
-        : `<span ${tagAttrs}><span class="dot"></span>${esc(year)}</span>`;
+      const tag = this._yearTag(this._recordYearOf(rec), this._fmtDate(rec.start), rec.url);
       return `<div class="tile">
         <div class="label">${RECORD_LABELS[key]}</div>
         <div class="value">${esc(fmtDuration(rec.time_s))}</div>
@@ -1060,9 +1139,7 @@ class HaSmashrunCard extends HTMLElement {
     }).join("");
 
     return `
-      <div class="chips" aria-label="${esc(this._t("select_years"))}">${this._chips(selected, "data-record-year", "_recordYears")}</div>
-      <div class="tiles">${tiles}</div>
-      <div class="note">${esc(this._t("records_note"))}</div>`;
+      <div class="tiles row">${tiles}</div>`;
   }
 
   // Year of a record's run, in HA's time zone like the server-side grouping.
@@ -1084,40 +1161,28 @@ class HaSmashrunCard extends HTMLElement {
       const counts = (this._data.years[y] && this._data.years[y].counts) || {};
       COUNT_KEYS.forEach((k) => (totals[k] += counts[k] || 0));
     });
-    const max = Math.max(1, ...Object.values(totals));
-
-    const buckets = this._data.count_buckets || {};
-    // Only ranges with runs in the selected years.
-    const tiles = COUNT_KEYS.filter((key) => totals[key]).map((key) => {
-      const [low, high] = buckets[key] || [];
-      let range = "";
-      if (low !== undefined && !low) range = `< ${this._num(this._dist(high), 1)} ${this._unit()}`;
-      else if (low !== undefined) {
-        range = `${this._num(this._dist(low), 1)} – ${this._num(this._dist(high), 1)} ${this._unit()}`;
-      }
-      return `<div class="tile">
-        <div class="label">${esc(COUNT_LABELS[key])}</div>
-        <div class="value">${esc(totals[key].toLocaleString(this._language()))}</div>
-        <div class="meta range">${esc(range)}</div>
-        <div class="bar"><span style="width:${(100 * totals[key]) / max}%"></span></div>
-      </div>`;
-    }).join("");
     const sum = COUNT_KEYS.reduce((acc, k) => acc + totals[k], 0);
+
+    // Only ranges with runs in the selected years; each bar is the range's
+    // share of the total.
+    const tile = (label, count, cls = "") => `<div class="tile${cls}">
+        <div class="label">${esc(label)}</div>
+        <div class="value">${esc(count.toLocaleString(this._language()))}</div>
+        <div class="bar"><span style="width:${sum ? (100 * count) / sum : 0}%"></span></div>
+      </div>`;
+    const tiles = COUNT_KEYS.filter((key) => totals[key])
+      .map((key) => tile(COUNT_LABELS[key], totals[key]))
+      .join("");
     if (!sum) {
       return `
       <div class="chips" aria-label="${esc(this._t("select_years"))}">${this._chips(selected, "data-count-year", "_countYears")}</div>
       <div class="empty">${esc(this._t("no_runs_selected"))}</div>`;
     }
-    const total = `<div class="tile total">
-        <div class="label">${esc(this._t("total"))}</div>
-        <div class="value">${esc(sum.toLocaleString(this._language()))}</div>
-        <div class="meta range">${esc(this._t("all_ranges"))}</div>
-      </div>`;
+    const total = tile(this._t("total"), sum, " total");
 
     return `
       <div class="chips" aria-label="${esc(this._t("select_years"))}">${this._chips(selected, "data-count-year", "_countYears")}</div>
-      <div class="tiles">${tiles}${total}</div>
-      <div class="note">${esc(this._t("count_note"))}</div>`;
+      <div class="tiles">${tiles}${total}</div>`;
   }
 }
 
@@ -1143,17 +1208,27 @@ const STYLE = `
     border-bottom: 2px solid transparent; margin-bottom: -1px;
   }
   .seg.on { color: var(--primary-color); border-bottom-color: var(--primary-color); font-weight: 500; }
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  /* Year filter: one line, scrolling sideways when it does not fit. */
+  .chips {
+    display: flex; flex-wrap: nowrap; gap: 6px; margin: 18px 0 8px; padding-bottom: 4px;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
+  }
+  .chips .chip { flex: none; white-space: nowrap; }
   .chip {
     display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font: inherit; font-size: 0.85em;
     padding: 4px 10px; border-radius: 16px; border: 1px solid var(--divider-color);
     background: none; color: var(--secondary-text-color); opacity: 0.7;
   }
-  .chip.on { opacity: 1; color: var(--primary-text-color); border-color: var(--c); }
+  /* Selected year (and the All/None button): text and the same 1 px border
+     in Home Assistant's blue (the theme's primary color) on a light theme,
+     or in the color of the tabs that are not selected (secondary text) on a
+     dark theme. */
+  .chip.on { opacity: 1; color: var(--primary-color); border-color: var(--primary-color); }
+  ha-card.dark .chip.on { color: var(--secondary-text-color); border-color: var(--secondary-text-color); }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--c); margin-right: 6px; vertical-align: middle; }
   .chip .dot { margin-right: 0; }
-  .chip.bulk { opacity: 1; }
-  .chip.bulk.on { color: var(--primary-color); border-color: var(--primary-color); }
+  .chip.bulk { opacity: 1; color: var(--primary-color); min-width: 4.5em; justify-content: center; }
+  ha-card.dark .chip.bulk { color: var(--secondary-text-color); }
   .chart { width: 100%; height: auto; display: block; }
   .chart-wrap { position: relative; touch-action: pan-y; }
   .chart .guide { stroke: var(--secondary-text-color); stroke-width: 1; stroke-dasharray: 3 3; }
@@ -1219,7 +1294,15 @@ const STYLE = `
   .tile .bar { height: 4px; border-radius: 2px; background: var(--divider-color); margin-top: 8px; overflow: hidden; }
   .tile .bar span { display: block; height: 100%; background: var(--primary-color); }
   .empty-tile .value { color: var(--disabled-text-color, var(--secondary-text-color)); }
-  .note { font-size: 0.78em; color: var(--secondary-text-color); margin-top: 10px; }
+  /* Personal Records: the four tiles on one line; the value shrinks with the
+     tile, and a card too narrow for them scrolls sideways. */
+  .tiles.row { grid-template-columns: repeat(4, minmax(92px, 1fr)); gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+  .tiles.row .tile { padding: 10px; min-width: 0; container-type: inline-size; }
+  .tiles.row .tile .value { font-size: clamp(1.05em, 17cqi, 1.6em); white-space: nowrap; }
+  .tiles.row .tile .pace { font-size: 0.9em; }
+  /* An empty line (the Year tile has no period) keeps its height, so the
+     year tags line up across the tiles. */
+  .tile .pace:empty::before { content: "\\00a0"; }
 `;
 
 if (!customElements.get(TAG)) customElements.define(TAG, HaSmashrunCard);
