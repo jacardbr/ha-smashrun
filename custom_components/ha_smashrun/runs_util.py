@@ -275,6 +275,26 @@ def personal_records(
     return best
 
 
+def runs_between(runs: Iterable[Any], tz: tzinfo, first: str, last: str) -> list[dict[str, Any]]:
+    """Runs whose local start date is from `first` to `last` (YYYY-MM-DD,
+    both included), oldest first, as the card shows them."""
+    found = []
+    for run in runs:
+        if run.start is None:
+            continue
+        local = run.start.astimezone(tz)
+        if first <= local.date().isoformat() <= last:
+            found.append(
+                {
+                    "run_id": run.run_id,
+                    "start": local.isoformat(),
+                    "distance_km": round(run.distance_km or 0.0, 3),
+                    "duration_s": round(run.duration_s or 0.0, 1),
+                }
+            )
+    return sorted(found, key=lambda r: r["start"])
+
+
 # Points kept from a run's track for the card (enough to draw it).
 TRACK_POINTS = 400
 

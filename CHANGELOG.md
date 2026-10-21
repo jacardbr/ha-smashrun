@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.0
+
+- Card, **Personal Records → Volume**: clicking **Day** shows that day's runs in full, like a performance record (date, time, location, distance, race time and pace, route); clicking **Week** shows that week's runs, Monday to Sunday, one row per day with runs (distance, time and pace of each); clicking **Month** shows that month as a calendar, Monday to Sunday, each day with its kilometres and shaded by them; clicking **Year** shows a heat map of that year, months down and weeks of the month across, each cell shaded by its kilometres. The runs come from the new `ha_smashrun/runs` WebSocket command, which reads the runs Home Assistant already has (no request to Smashrun).
+
 ## 0.5.0
 
 - Card, **Personal Records → Performance**: clicking a tile shows the run behind the record below the tiles (date and time, location, distance, time, pace and its route drawn from the GPS track over Esri's Light Gray or Dark Gray Canvas map, following the theme, which the new `route_map` card option turns off); clicking it again hides it. The records now also carry the run's total time. The location comes from the new `ha_smashrun/run` WebSocket command, which reads the run from Smashrun once (`GET /my/activities/{id}`) and caches its location and its GPS track thinned to 400 points.

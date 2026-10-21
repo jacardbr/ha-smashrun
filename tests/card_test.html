@@ -8,7 +8,8 @@
   The page prints "RESULT: PASS (n checks)" or "RESULT: FAIL ..." in #out.
   Add ?demo=statistics|records|count (and &lang=pt, &theme=dark, &units=mi, &w=340,
   &mode=monthly|volume and &detail=1 (open the table) for the statistics tab,
-  &rmode=volume and &rdetail=10k (open a record's run) for the records tab,
+  &rmode=volume and &rdetail=10k (open a record's run) or &vdetail=day|week|month|year
+  (open the biggest day's, week's, month's or year's runs) for the records tab,
   &hover=<month 0-11> to show the chart tooltip)
   to show one card for a screenshot instead of running the checks.
 -->
@@ -118,6 +119,17 @@ function makeHass({ lang = "en", units = "km", runs = "42", fail = false, dark =
     callWS: async (msg) => {
       calls.push(msg);
       if (fail) throw { code: "not_found", message: "Smashrun is not set up" };
+      if (msg.type === "ha_smashrun/runs") {
+        // A run every day but Wednesdays and Sundays; two on Saturdays.
+        const runs = [];
+        for (let d = new Date(`${msg.first}T12:00:00Z`); d <= new Date(`${msg.last}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + 1)) {
+          const date = d.toISOString().slice(0, 10), wd = d.getUTCDay();
+          if (wd === 3 || wd === 0) continue;
+          runs.push({ run_id: `${date.replace(/-/g, "")}1`, start: `${date}T06:30:00-03:00`, distance_km: 8 + wd, duration_s: (8 + wd) * 300 });
+          if (wd === 6) runs.push({ run_id: `${date.replace(/-/g, "")}2`, start: `${date}T18:00:00-03:00`, distance_km: 5, duration_s: 1500 });
+        }
+        return { runs };
+      }
       if (msg.type === "ha_smashrun/run") {
         if (msg.run_id === "503") throw { code: "smashrun_error", message: "boom" };
         const track = Array.from({ length: 60 }, (_, i) => {
@@ -196,6 +208,10 @@ async function demo() {
   if (params.get("rmode")) {
     await tick(); await tick();
     $(document.querySelector("ha-smashrun-card"), `[data-record-mode="${params.get("rmode")}"]`).click();
+  }
+  if (params.get("vdetail")) {
+    await tick(); await tick();
+    $(document.querySelector("ha-smashrun-card"), `[data-volume-key="${params.get("vdetail")}"]`).click();
   }
   if (params.get("rdetail")) {
     await tick(); await tick();
@@ -510,6 +526,85 @@ async function run() {
   $(card, '[data-record-mode="volume"]').click();
   eq($$(card, ".tile .label").map((l) => l.textContent), ["Day", "Week", "Month", "Year"], "biggest day, week, month, year");
   ok(oneLine(), "records volume: four tiles on one line");
+  // Day: its runs in full, like a performance record (a Saturday: two runs).
+  eq($$(card, "[data-volume-key]").map((t) => t.dataset.volumeKey), ["day", "week", "month", "year"], "every volume tile is clickable");
+  $(card, '[data-volume-key="day"]').click();
+  await tick(); await tick();
+  let panels = $$(card, '.run-detail[data-volume-detail="day"]');
+  eq(panels.length, 2, "day: one panel per run of that day");
+  const dayRows = Object.fromEntries([...panels[0].querySelectorAll(".run-row")].map((r) => [r.querySelector("dt").textContent, r.querySelector("dd").textContent]));
+  eq([dayRows.Distance, dayRows["Race Time"], dayRows["Race Pace"]], ["14.00 km", "1:10:00", "5:00 /km"], "day: run data like a performance record");
+  ok(panels[0].querySelector(".run-head").textContent.trim() === "Day" && $(card, '[data-volume-key="day"]').classList.contains("selected"), "day: heading and selected tile");
+  ok(panels[0].querySelector(".run-map"), "day: route");
+  // Week: Monday to Sunday, runs in their day, rest days empty.
+  $(card, '[data-volume-key="week"]').click();
+  await tick(); await tick();
+  ok(!$(card, '[data-volume-detail="day"]'), "week replaces the day detail");
+  const weekPanel = $(card, '.run-detail[data-volume-detail="week"]');
+  const weekRows = [...weekPanel.querySelectorAll("tbody tr")];
+  const weekdays = weekRows.map((r) => new Date(`${r.dataset.date}T12:00:00Z`).getUTCDay());
+  eq(weekdays, [1, 2, 4, 5, 6], "week: only days with runs (no Wednesday or Sunday), Monday first");
+  ok(weekRows[0].textContent.includes("9.00 km") && weekRows[0].textContent.includes("45:00") && weekRows[0].textContent.includes("5:00 /km"), "week: distance, time and pace of a day's run");
+  eq(weekRows[4].querySelectorAll("td.num")[0].innerHTML.split("<br>").length, 2, "week: two runs on Saturday, one line each");
+  ok(weekPanel.querySelector(".run-head").textContent.includes("Week"), "week: heading");
+  const rangeCalls = card._hass.calls.filter((c) => c.type === "ha_smashrun/runs");
+  ok(rangeCalls.some((c) => c.first !== c.last && new Date(`${c.first}T12:00:00Z`).getUTCDay() === 1), "week: asks for Monday to Sunday");
+  // Month: a calendar, Monday first; days with runs show their km.
+  $(card, '[data-volume-key="month"]').click();
+  await tick(); await tick();
+  const cal = $(card, '.run-detail[data-volume-detail="month"] table.month-cal');
+  ok(cal, "month: calendar");
+  eq([...cal.querySelectorAll("thead th")].map((t) => t.textContent), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], "month: Monday to Sunday");
+  const calYear = Number($(card, '[data-best="month"] .yeartag').textContent);
+  const calMonth = ["January","February","March","April","May","June","July","August","September","October","November","December"].indexOf($(card, '[data-best="month"] .pace').textContent);
+  const calDays = new Date(Date.UTC(calYear, calMonth + 1, 0)).getUTCDate();
+  eq([...cal.querySelectorAll("td.cal:not(.none)")].map((c) => Number(c.dataset.day)), Array.from({ length: calDays }, (_, i) => i + 1), "month: every day of the month, in order");
+  const firstCell = cal.querySelector("tbody tr").children;
+  const blanks = (new Date(Date.UTC(calYear, calMonth, 1)).getUTCDay() + 6) % 7;
+  ok([...firstCell].slice(0, blanks).every((c) => c.classList.contains("none")) && firstCell[blanks].dataset.day === "1", "month: day 1 under its weekday");
+  const ranDays = [...cal.querySelectorAll("td.cal.ran")];
+  ok(ranDays.length > 0 && ranDays.every((c) => {
+    const wd = new Date(Date.UTC(calYear, calMonth, Number(c.dataset.day))).getUTCDay();
+    return wd !== 3 && wd !== 0 && Math.abs(Number(c.dataset.km) - (8 + wd + (wd === 6 ? 5 : 0))) < 0.01;
+  }), "month: each day's km (two runs on Saturdays added up)");
+  ok([...cal.querySelectorAll("td.cal:not(.ran):not(.none)")].every((c) => c.querySelector(".cal-km").textContent === ""), "month: rest days show only the date");
+  ok(cal.querySelector("td.cal.ran").title.includes("km"), "month: tooltip");
+  ok([...cal.querySelectorAll("td.cal.ran .cal-km")].every((k) => /^\d+\.\dK$/.test(k.textContent)), "month: km with a K after the number");
+
+  // Year: heat map, months down, weeks of the month across.
+  $(card, '[data-volume-key="year"]').click();
+  await tick(); await tick();
+  const heat = $(card, '.run-detail[data-volume-detail="year"] table.year-heat');
+  ok(heat, "year: heat map");
+  const heatYear = Number($(card, '[data-best="year"] .yeartag').textContent);
+  eq([...heat.querySelectorAll("tbody tr")].length, 12, "year: twelve months");
+  eq([...heat.querySelectorAll("thead th")].slice(1).map((t) => t.textContent), ["W1", "W2", "W3", "W4", "W5", "W6"], "year: six week columns");
+  // Expected from the fake runs: every day but Wed/Sun, 8 + weekday km, +5 km on Saturdays.
+  const expectKm = (m, w) => {
+    let total = 0;
+    const first = (new Date(Date.UTC(heatYear, m, 1)).getUTCDay() + 6) % 7;
+    for (let d = 1; d <= new Date(Date.UTC(heatYear, m + 1, 0)).getUTCDate(); d++) {
+      if (Math.floor((d - 1 + first) / 7) !== w) continue;
+      const wd = new Date(Date.UTC(heatYear, m, d)).getUTCDay();
+      if (wd === 3 || wd === 0) continue;
+      total += 8 + wd + (wd === 6 ? 5 : 0);
+    }
+    return total;
+  };
+  const cells = [...heat.querySelectorAll("td.heat:not(.none)")];
+  ok(cells.every((c) => Math.abs(Number(c.dataset.km) - expectKm(Number(c.dataset.month), Number(c.dataset.week))) < 0.01), "year: each cell adds up its week's km");
+  const febWeeks = new Set([...heat.querySelectorAll('td.heat:not(.none)[data-month="1"]')].map((c) => c.dataset.week)).size;
+  const firstFeb = (new Date(Date.UTC(heatYear, 1, 1)).getUTCDay() + 6) % 7, febDays = new Date(Date.UTC(heatYear, 2, 0)).getUTCDate();
+  eq(febWeeks, Math.floor((febDays - 1 + firstFeb) / 7) + 1, "year: a month only spans its own weeks");
+  const levels = cells.filter((c) => Number(c.dataset.km) > 0).map((c) => Number(c.style.getPropertyValue("--level")));
+  ok(Math.max(...levels) === 1 && levels.every((l) => l > 0), "year: the biggest week is the strongest color");
+  ok(cells.filter((c) => Number(c.dataset.km) === 0).every((c) => c.classList.contains("empty") && c.textContent.trim() === ""), "year: weeks without runs stay empty");
+  const rowHeights = [...heat.querySelectorAll("tbody tr")].map((r) => Math.round(r.getBoundingClientRect().height));
+  ok(Math.max(...rowHeights) - Math.min(...rowHeights) <= 1, "year: every month row has the same height");
+  ok(cells[0].title.includes("km"), "year: tooltip with the km");
+  ok(cells.filter((c) => Number(c.dataset.km) > 0).every((c) => /^\d+K$/.test(c.textContent.trim())), "year: km with a K after the number");
+  $(card, '[data-volume-key="year"]').click();
+  ok(!$(card, '[data-volume-detail]'), "a second click hides it");
   ok(!$(card, ".note"), "no note under the records volume");
   ok(new Set($$(card, ".tiles.row .yeartag").map((t) => Math.round(t.getBoundingClientRect().top))).size === 1, "records volume: year tags at the same height");
   const allMonths = Object.entries(years).flatMap(([y, d]) => d.months_km.map((km, i) => ({ y, i, km })));

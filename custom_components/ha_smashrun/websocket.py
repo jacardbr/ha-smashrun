@@ -18,6 +18,7 @@ from .runs_util import (
     count_buckets,
     personal_records,
     run_details,
+    runs_between,
     weekly_summary,
     yearly_summary,
 )
@@ -27,6 +28,30 @@ def async_register(hass: HomeAssistant) -> None:
     """Register the commands."""
     websocket_api.async_register_command(hass, ws_summary)
     websocket_api.async_register_command(hass, ws_run)
+    websocket_api.async_register_command(hass, ws_runs)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/runs",
+        vol.Required("first"): vol.Match(r"^\d{4}-\d{2}-\d{2}$"),
+        vol.Required("last"): vol.Match(r"^\d{4}-\d{2}-\d{2}$"),
+        vol.Optional("entry_id"): str,
+    }
+)
+@callback
+def ws_runs(hass: HomeAssistant, connection, msg) -> None:
+    """The runs of a date range (local dates), from the runs already read:
+    no request to Smashrun."""
+    entry = _loaded_entry(hass, msg.get("entry_id"))
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Smashrun is not set up")
+        return
+    runs = entry.runtime_data.data.runs
+    tz = dt_util.get_default_time_zone()
+    connection.send_result(
+        msg["id"], {"runs": runs_between(runs, tz, msg["first"], msg["last"])}
+    )
 
 
 def _loaded_entry(hass: HomeAssistant, entry_id: str | None):

@@ -500,6 +500,15 @@ class RunsUtilTests(unittest.TestCase):
         self.assertEqual(bucket(47.999), "42k")
         self.assertIsNone(bucket(48.0))  # ultras are not counted
 
+    def test_runs_between(self):
+        runs = runs_util.runs_between(self._runs(), TZ, "2026-10-12", "2026-10-18")
+        self.assertEqual([r["run_id"] for r in runs], ["1", "2"])  # the 19th is outside
+        self.assertEqual(runs[0]["distance_km"], 5.0)
+        self.assertEqual(runs[0]["duration_s"], 1500.0)
+        self.assertTrue(runs[0]["start"].startswith("2026-10-12T07:10:00"))
+        # Local dates: 2025-12-31 06:00 at UTC-3.
+        self.assertEqual([r["run_id"] for r in runs_util.runs_between(self._runs(), TZ, "2025-12-31", "2025-12-31")], ["4"])
+
     def test_run_details(self):
         # Shape of GET /my/activities/{id} (seen on the public example account).
         lats = [-1] + [40.68 + i / 10000 for i in range(999)]

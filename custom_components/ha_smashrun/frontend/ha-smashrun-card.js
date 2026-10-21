@@ -63,6 +63,7 @@ const STRINGS = {
     detail: "Detail",
     week: "Week",
     week_n: "Week {n}",
+    week_short: "W{n}",
     month: "Month",
     year: "Year",
     distance: "Distance",
@@ -100,6 +101,7 @@ const STRINGS = {
     detail: "Detalhes",
     week: "Semana",
     week_n: "Semana {n}",
+    week_short: "S{n}",
     month: "Mês",
     year: "Ano",
     distance: "Distância",
@@ -205,7 +207,9 @@ class HaSmashrunCard extends HTMLElement {
     this._showTable = false;
     this._recordMode = "performance"; // records tab: performance | volume
     this._recordDetail = null; // performance tile whose run is shown below (key)
-    this._runInfo = {}; // run id -> details from ha_smashrun/run (location, track), "loading" or null // year table under the line chart (Detail button)
+    this._runInfo = {}; // run id -> details from ha_smashrun/run (location, track), "loading" or null
+    this._volumeDetail = null; // records volume tile whose runs are shown below: day | week
+    this._rangeRuns = {}; // "first|last" -> runs from ha_smashrun/runs, "loading" or null // year table under the line chart (Detail button)
     this._years = null; // selected years in the chart (Set), null = default
     this._recordYears = null; // selected years in the records (Set), null = default
     this._countYears = null; // selected years in the count (Set), null = default
@@ -390,6 +394,11 @@ class HaSmashrunCard extends HTMLElement {
     } catch (e) {
       return value.toFixed(digits);
     }
+  }
+
+  // A compact distance for small cells: "9.0K" (km) or "5.6M" (miles).
+  _short(km, digits) {
+    return `${this._num(this._dist(km), digits)}${this._imperial() ? "M" : "K"}`;
   }
 
   _fmtDist(km, digits = 1) {
@@ -621,6 +630,13 @@ class HaSmashrunCard extends HTMLElement {
         if (ev.target.closest("a")) return;
         const key = tile.dataset.recordKey;
         this._recordDetail = this._recordDetail === key ? null : key;
+        this._render();
+      })
+    );
+    root.querySelectorAll("[data-volume-key]").forEach((tile) =>
+      tile.addEventListener("click", () => {
+        const key = tile.dataset.volumeKey;
+        this._volumeDetail = this._volumeDetail === key ? null : key;
         this._render();
       })
     );
@@ -1128,7 +1144,12 @@ class HaSmashrunCard extends HTMLElement {
           <div class="meta">${esc(this._t("no_runs_selected"))}</div>
         </div>`;
       }
-      return `<div class="tile" data-best="${key}">
+      // Each tile shows its runs below when clicked.
+      const clickable = true;
+      const open = clickable && this._volumeDetail === key;
+      return `<div class="tile${clickable ? " clickable" : ""}${open ? " selected" : ""}" data-best="${key}"${
+        clickable ? ` data-volume-key="${key}" role="button" tabindex="0" aria-expanded="${open}"` : ""
+      }>
         <div class="label">${esc(this._t(key))}</div>
         <div class="value">${esc(this._fmtDist(best.km, digits))}</div>
         <div class="pace">${esc(when ? when.charAt(0).toUpperCase() + when.slice(1) : "")}</div>
@@ -1142,8 +1163,175 @@ class HaSmashrunCard extends HTMLElement {
       tile("month", month, 0, month ? this._monthLong(month.month) : ""),
       tile("year", year, 0, ""),
     ].join("");
+    let detail = "";
+    if (this._volumeDetail === "day" && day) detail = this._dayRuns(day);
+    if (this._volumeDetail === "week" && week) detail = this._weekRuns(week);
+    if (this._volumeDetail === "month" && month) detail = this._monthCalendar(month);
+    if (this._volumeDetail === "year" && year) detail = this._yearHeat(year);
     return `
-      <div class="tiles row">${tiles}</div>`;
+      <div class="tiles row">${tiles}</div>
+      ${detail}`;
+  }
+
+  // The biggest day's runs, each in full like a performance record.
+  _dayRuns(day) {
+    const runs = this._runsOf(day.date, day.date);
+    if (runs === "loading") return `<div class="run-detail" data-volume-detail="day"><div class="run-head"><span class="label">${esc(this._t("day"))}</span></div>…</div>`;
+    if (!runs || !runs.length) return "";
+    return runs
+      .map((r) =>
+        this._runPanel(
+          this._t("day"),
+          { run_id: r.run_id, start: r.start, run_distance_km: r.distance_km, run_duration_s: r.duration_s },
+          'data-volume-detail="day"'
+        )
+      )
+      .join("");
+  }
+
+  // The biggest month as a calendar: Monday to Sunday columns, one row per
+  // week; days with runs show their kilometres, shaded like the year's heat
+  // map.
+  _monthCalendar(month) {
+    const y = Number(month.year);
+    const m = month.month;
+    const pad = (n) => String(n).padStart(2, "0");
+    const days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const runs = this._runsOf(`${y}-${pad(m + 1)}-01`, `${y}-${pad(m + 1)}-${pad(days)}`);
+    const title = this._monthLong(m);
+    const head = `<div class="run-head"><span class="label">${esc(title.charAt(0).toUpperCase() + title.slice(1))} ${y}</span></div>`;
+    if (runs === "loading") return `<div class="run-detail" data-volume-detail="month">${head}…</div>`;
+    const km = Array(days + 1).fill(0);
+    const count = Array(days + 1).fill(0);
+    (runs || []).forEach((r) => {
+      const d = Number(r.start.slice(8, 10));
+      km[d] += r.distance_km || 0;
+      count[d] += 1;
+    });
+    const max = Math.max(0, ...km);
+    // Weekday names, Monday first (2024-01-01 was a Monday).
+    const names = Array.from({ length: 7 }, (_, i) => {
+      try {
+        return new Date(Date.UTC(2024, 0, 1 + i, 12)).toLocaleDateString(this._language(), { weekday: "short", timeZone: "UTC" });
+      } catch (e) {
+        return "";
+      }
+    });
+    const first = (new Date(Date.UTC(y, m, 1)).getUTCDay() + 6) % 7; // blanks before day 1
+    const cells = [...Array(first).fill(null), ...Array.from({ length: days }, (_, i) => i + 1)];
+    while (cells.length % 7) cells.push(null);
+    let rows = "";
+    for (let i = 0; i < cells.length; i += 7) {
+      rows += `<tr>${cells
+        .slice(i, i + 7)
+        .map((d) => {
+          if (d === null) return `<td class="cal none"></td>`;
+          const v = km[d];
+          const level = max && v ? Math.max(0.15, v / max) : 0;
+          const tip = v ? `${this._fmtDist(v, 1)} · ${count[d]}` : "";
+          return `<td class="cal${v ? " ran" : ""}" data-day="${d}" data-km="${v.toFixed(3)}" style="--level:${level.toFixed(3)}"${
+            tip ? ` title="${esc(tip)}"` : ""
+          }><span class="cal-day">${d}</span><span class="cal-km">${v ? esc(this._short(v, 1)) : ""}</span></td>`;
+        })
+        .join("")}</tr>`;
+    }
+    return `
+      <div class="run-detail" data-volume-detail="month">
+        ${head}
+        <table class="month-cal">
+          <thead><tr>${names.map((n) => `<th>${esc(n.replace(".", ""))}</th>`).join("")}</tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  // The biggest year as a heat map: one row per month, one column per week
+  // of the month (weeks start on Monday; a month spans up to 6), each cell
+  // shaded by its kilometres.
+  _yearHeat(year) {
+    const y = Number(year.year);
+    const runs = this._runsOf(`${y}-01-01`, `${y}-12-31`);
+    const head = `<div class="run-head"><span class="label">${esc(this._t("year"))} ${esc(year.year)}</span></div>`;
+    if (runs === "loading") return `<div class="run-detail" data-volume-detail="year">${head}…</div>`;
+    const km = Array.from({ length: 12 }, () => Array(6).fill(0));
+    const count = Array.from({ length: 12 }, () => Array(6).fill(0));
+    const weekOf = (m, day) => {
+      const first = (new Date(Date.UTC(y, m, 1)).getUTCDay() + 6) % 7; // Monday = 0
+      return Math.floor((day - 1 + first) / 7);
+    };
+    (runs || []).forEach((r) => {
+      const [, mm, dd] = r.start.slice(0, 10).split("-").map(Number);
+      const w = weekOf(mm - 1, dd);
+      km[mm - 1][w] += r.distance_km || 0;
+      count[mm - 1][w] += 1;
+    });
+    const max = Math.max(0, ...km.flat());
+    const lastDay = (m) => new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const header = `<tr><th></th>${Array.from({ length: 6 }, (_, w) => `<th>${esc(this._t("week_short", { n: w + 1 }))}</th>`).join("")}</tr>`;
+    const rows = km
+      .map((weeks, m) => {
+        const used = weekOf(m, lastDay(m)) + 1; // weeks this month spans
+        const cells = weeks
+          .map((v, w) => {
+            if (w >= used) return `<td class="heat none">&nbsp;</td>`;
+            const level = max && v ? Math.max(0.15, v / max) : 0;
+            const title = v ? `${this._monthLong(m)}, ${this._t("week_short", { n: w + 1 })}: ${this._fmtDist(v, 1)} · ${count[m][w]}` : "";
+            return `<td class="heat${v ? "" : " empty"}" data-month="${m}" data-week="${w}" data-km="${v.toFixed(3)}" style="--level:${level.toFixed(
+              3
+            )}"${title ? ` title="${esc(title)}"` : ""}>${v ? esc(this._short(v, 0)) : "&nbsp;"}</td>`;
+          })
+          .join("");
+        return `<tr><th class="month">${esc(this._monthName(m))}</th>${cells}</tr>`;
+      })
+      .join("");
+    return `
+      <div class="run-detail" data-volume-detail="year">
+        ${head}
+        <table class="year-heat"><thead>${header}</thead><tbody>${rows}</tbody></table>
+      </div>`;
+  }
+
+  // The biggest week, Monday to Sunday: one row per day with runs
+  // (distance, time, pace); days without runs are left out.
+  _weekRuns(week) {
+    // Monday of ISO week `week.week` of ISO year `week.year`.
+    const jan4 = new Date(Date.UTC(Number(week.year), 0, 4));
+    const monday = new Date(jan4);
+    monday.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() + 6) % 7) + (week.week - 1) * 7);
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(monday);
+      d.setUTCDate(monday.getUTCDate() + i);
+      return d.toISOString().slice(0, 10);
+    });
+    const runs = this._runsOf(days[0], days[6]);
+    const head = `<div class="run-head"><span class="label">${esc(this._t("week_n", { n: week.week }))}</span></div>`;
+    if (runs === "loading") return `<div class="run-detail" data-volume-detail="week">${head}…</div>`;
+    const byDay = {};
+    (runs || []).forEach((r) => (byDay[r.start.slice(0, 10)] = [...(byDay[r.start.slice(0, 10)] || []), r]));
+    const lines = (list, fn) => list.map((r) => esc(fn(r))).join("<br>");
+    const rows = days
+      .filter((date) => byDay[date])
+      .map((date) => {
+        let label = date;
+        try {
+          label = new Date(`${date}T12:00:00`).toLocaleDateString(this._language(), { weekday: "short", day: "numeric", month: "short" });
+        } catch (e) {
+          // keep the ISO date
+        }
+        const list = byDay[date] || [];
+        return `<tr data-date="${date}">
+          <td class="wd">${esc(label.charAt(0).toUpperCase() + label.slice(1))}</td>
+          <td class="num">${lines(list, (r) => this._fmtDist(r.distance_km, 2))}</td>
+          <td class="num">${lines(list, (r) => fmtDuration(r.duration_s))}</td>
+          <td class="num">${lines(list, (r) => (r.distance_km ? this._fmtPace(r.duration_s / r.distance_km) : ""))}</td>
+        </tr>`;
+      })
+      .join("");
+    return `
+      <div class="run-detail week-detail" data-volume-detail="week">
+        ${head}
+        <table class="table week-runs"><tbody>${rows}</tbody></table>
+      </div>`;
   }
 
   // Records, Performance: fastest 5K, 10K, 21K and 42K of the selected years.
@@ -1264,6 +1452,28 @@ class HaSmashrunCard extends HTMLElement {
       </div>`;
   }
 
+  // Asks Home Assistant for the runs of a date range (once per range).
+  async _loadRange(first, last) {
+    const key = `${first}|${last}`;
+    if (key in this._rangeRuns || !this._hass || typeof this._hass.callWS !== "function") return;
+    this._rangeRuns[key] = "loading";
+    const msg = { type: `${DOMAIN}/runs`, first, last };
+    if (this._config.entry_id) msg.entry_id = this._config.entry_id;
+    try {
+      this._rangeRuns[key] = (await this._hass.callWS(msg)).runs || [];
+    } catch (err) {
+      this._rangeRuns[key] = null;
+    }
+    this._render();
+  }
+
+  // The runs of a date range: a list, "loading" (asked) or null (failed).
+  _runsOf(first, last) {
+    const key = `${first}|${last}`;
+    if (!(key in this._rangeRuns)) Promise.resolve().then(() => this._loadRange(first, last));
+    return key in this._rangeRuns ? this._rangeRuns[key] : "loading";
+  }
+
   // "City, State, Country" without repeats (New York, New York -> once).
   _place(info) {
     const parts = [];
@@ -1275,6 +1485,13 @@ class HaSmashrunCard extends HTMLElement {
 
   // The run behind a performance record, shown below the tiles.
   _recordRun(key, rec) {
+    return this._runPanel(RECORD_LABELS[key], rec, `data-record-detail="${key}"`);
+  }
+
+  // One run in full: date, time, distance, race time and pace on the left;
+  // location and route on the right. `rec` has run_id, start,
+  // run_distance_km and run_duration_s.
+  _runPanel(title, rec, attrs = "") {
     const info = this._runInfo[rec.run_id];
     if (info === undefined) Promise.resolve().then(() => this._loadRun(rec.run_id));
     const place = info === "loading" || info === undefined ? "…" : info ? this._place(info) : "";
@@ -1296,9 +1513,9 @@ class HaSmashrunCard extends HTMLElement {
     const twoCols = inner >= 420;
     const mapWidth = twoCols ? Math.floor((inner - 16) / 2) : inner;
     return `
-      <div class="run-detail" data-record-detail="${key}">
+      <div class="run-detail" ${attrs}>
         <div class="run-head">
-          <span class="label">${RECORD_LABELS[key]}</span>
+          <span class="label">${esc(title)}</span>
         </div>
         <div class="run-body${twoCols ? " cols" : ""}">
         <dl>
@@ -1483,6 +1700,32 @@ const STYLE = `
   .run-body.cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
   .run-detail dl { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .run-side { display: grid; gap: 8px; align-content: start; }
+  .month-cal { width: 100%; border-collapse: separate; border-spacing: 3px; table-layout: fixed; font-size: 0.8em; }
+  .month-cal th { font-weight: 500; color: var(--secondary-text-color); padding: 2px; text-transform: capitalize; }
+  .month-cal td.cal {
+    height: 42px; padding: 3px 5px; vertical-align: top; border-radius: 6px; background: var(--divider-color);
+    color: var(--secondary-text-color);
+  }
+  .month-cal td.cal.ran {
+    background: color-mix(in srgb, var(--primary-color) calc(var(--level) * 100%), var(--divider-color));
+    color: var(--primary-text-color);
+  }
+  .month-cal td.cal.none { background: none; }
+  .month-cal .cal-day { display: block; font-size: 0.85em; }
+  .month-cal .cal-km { display: block; text-align: center; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .year-heat { width: 100%; border-collapse: separate; border-spacing: 3px; table-layout: fixed; font-size: 0.8em; }
+  .year-heat th { font-weight: 500; color: var(--secondary-text-color); padding: 2px; }
+  .year-heat th.month { text-align: left; width: 3em; text-transform: capitalize; }
+  .year-heat td.heat {
+    height: 22px; line-height: 22px; padding: 0; border-radius: 4px; text-align: center; font-variant-numeric: tabular-nums;
+    background: color-mix(in srgb, var(--primary-color) calc(var(--level) * 100%), var(--divider-color));
+    color: var(--primary-text-color);
+  }
+  .year-heat td.heat.empty { background: var(--divider-color); }
+  .year-heat td.heat.none { background: none; }
+  .week-runs { margin-top: 0; }
+  .week-runs td { vertical-align: top; }
+  .week-runs .wd { white-space: nowrap; color: var(--primary-text-color); }
   .run-side .run-row { text-align: center; }
   .run-row dt { font-size: 0.8em; color: var(--secondary-text-color); }
   .run-row dd { margin: 2px 0 0; font-size: 0.95em; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
